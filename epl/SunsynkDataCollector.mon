@@ -70,6 +70,7 @@ event SunsynkConfiguration {
 					if t.key = k {
 						config.options[k] := t.value;
 					}
+				}
 			}
 			string k;
 			for k in options {
