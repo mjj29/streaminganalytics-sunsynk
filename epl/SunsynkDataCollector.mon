@@ -55,7 +55,7 @@ event SunsynkRequest {
 
 event SunsynkConfiguration {
 	constant string CREATED_CHANNEL := "SunsynkConfiguration.created";
-	static action create() returns integer
+	static action create(string category, sequence<string> options) returns integer
 	{
 		SunsynkConfiguration config := new SunsynkConfiguration;
 		config.id := integer.getUnique();
@@ -65,30 +65,27 @@ event SunsynkConfiguration {
 			monitor.unsubscribe(FindTenantOptionsResponse.SUBSCRIBE_CHANNEL);
 			TenantOption t;
 			for t in resp.options {
-				if t.key = "username" {
-					config.username := t.value;
-				}
-				if t.key = "password" {
-					config.password := t.value;
-				}
-				if t.key = "inverterId" {
-					config.inverterId := t.value;
+				string k;
+				for k in options {
+					if t.key = k {
+						config.options[k] := t.value;
+					}
+			}
+			string k;
+			for k in options {
+				if not config.options.hasKey(k) {
+					log "Error, missing configuration, define the following tenant options in the "+category+" category: "+options.toString() at ERROR;
+					return;
 				}
 			}
-			if config.username != "" and config.password != "" and config.inverterId != "" {
-				log "Starting sunsynk monitoring username "+config.username+" inverterId "+config.inverterId;
-				send config to CREATED_CHANNEL;
-			} else {
-				log "Error, missing configuraton, define tenant options apamax.sunsynk.username, apamax.sunsynk.password, apamax.sunsynk.inverterId" at ERROR;
-			}
+			
+			send config to CREATED_CHANNEL;
 		}
-		send FindTenantOptions(reqId, false, "apamax.sunsynk", "", new dictionary<string, string>) to FindTenantOptions.SEND_CHANNEL;
+		send FindTenantOpations(reqId, false, category, "", new dictionary<string, string>) to FindTenantOptions.SEND_CHANNEL;
 		return config.id;
 	}
 	integer id;
-	string username;
-	string password;
-	string inverterId;
+	dictionary<string, string> options;
 }
 
 event SunsynkDevices {
@@ -243,9 +240,10 @@ monitor SunsynkDataCollectorMonitor
 		monitor.subscribe(SunsynkDataCollector.CREATED_CHANNEL);
 		monitor.subscribe(SunsynkConfiguration.CREATED_CHANNEL);
 		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
-		on SunsynkConfiguration(id=SunsynkConfiguration.create()): config {
-			on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk"+config.inverterId)): devices {		
-				on SunsynkDataCollector(id=SunsynkDataCollector.create(config.username, config.password, config.inverterId)): collector {
+		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["username", "password", "inverterId"])): config {
+			log "Starting sunsynk monitoring username "+config.options["username"]+" inverterId "+config.options["inverterId"];
+			on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk"+config.options["inverterId"])): devices {		
+				on SunsynkDataCollector(id=SunsynkDataCollector.create(config.options["username"], config.options["password"], config.options["inverterId)): collector {
 					on all wait(60.*5.) {
 						collector.getFlow(flowToMeasurement);
 						collector.getLoad(ResponseToMeasurement(devices.deviceId, "sunsynkLoad", "loadError", [{"data.dailyUsed":["sunsynkHome", "loadDailyUsage", "kW"]}]).exec);
