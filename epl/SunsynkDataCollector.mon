@@ -93,22 +93,22 @@ event SunsynkConfiguration {
 
 event SunsynkDevices {
 	constant string CREATED_CHANNEL := "SunsynkDevices.created";
-	static action create(string inverterId) returns integer
+	static action create(string type, string name) returns integer
 	{
 		SunsynkDevices devices := new SunsynkDevices;
 		devices.id := integer.getUnique();
 		monitor.subscribe(FindManagedObjectResponse.SUBSCRIBE_CHANNEL);
 		integer reqId := Util.generateReqId();
-		Fn.getAllEvents("com.apama.cumulocity.FindManagedObjectResponse", {"reqId":<any>reqId}, "com.apama.cumulocity.FindManagedObjectResponseAck", {"reqId":<any>reqId}, Fn.partial(devices.checkForManagedObject, inverterId));
-		send FindManagedObject(reqId, "", {"type":"sunsynkInvertor"}) to FindManagedObject.SEND_CHANNEL;
+		Fn.getAllEvents("com.apama.cumulocity.FindManagedObjectResponse", {"reqId":<any>reqId}, "com.apama.cumulocity.FindManagedObjectResponseAck", {"reqId":<any>reqId}, Fn.partial(devices.checkForManagedObject, [type, name]));
+		send FindManagedObject(reqId, "", {"type":type}) to FindManagedObject.SEND_CHANNEL;
 		return devices.id;
 	}
-	action checkForManagedObject(string inverterId, sequence<FindManagedObjectResponse> responses) {
+	action checkForManagedObject(string type, string name, sequence<FindManagedObjectResponse> responses) {
 		FindManagedObjectResponse resp;
 		for resp in responses {
-			if resp.managedObject.name = "sunsynk"+inverterId {
+			if resp.managedObject.name = name {
 				log "Found Managed Object "+resp.managedObject.toString();
-				sunsynkDeviceId := resp.managedObject.id;
+				deviceId := resp.managedObject.id;
 				send self to CREATED_CHANNEL;
 				return;
 			}
@@ -116,17 +116,17 @@ event SunsynkDevices {
 		monitor.subscribe(ManagedObject.SUBSCRIBE_CHANNEL);
 		integer reqId := Util.generateReqId();
 		on ObjectCommitted(reqId=reqId) as oc and not ObjectCommitFailed(reqId=reqId) {
-			sunsynkDeviceId := oc.id;
+			deviceId := oc.id;
 			log "Created managed Object "+oc.id;
 			send self to CREATED_CHANNEL;
 		}
 		on ObjectCommitFailed(reqId=reqId) as ocf and not ObjectCommitted(reqId=reqId) {
 			log "Failure creating managed object: "+ocf.body.valueToString() at ERROR;
 		}
-		send (<ManagedObject>Fn.setFields(new ManagedObject, {"type":"sunsynkInvertor", "name":"sunsynk"+inverterId, "params": {"c8y_IsDevice":<any>new dictionary<any, any>}})).withChannelResponse(reqId, new dictionary<string, string>) to ManagedObject.SEND_CHANNEL;
+		send (<ManagedObject>Fn.setFields(new ManagedObject, {"type":type, "name":name, "params": {"c8y_IsDevice":<any>new dictionary<any, any>}})).withChannelResponse(reqId, new dictionary<string, string>) to ManagedObject.SEND_CHANNEL;
 	}
 	integer id;
-	string sunsynkDeviceId;
+	string deviceId;
 }
 
 event SunsynkDataCollector {
@@ -244,13 +244,13 @@ monitor SunsynkDataCollectorMonitor
 		monitor.subscribe(SunsynkConfiguration.CREATED_CHANNEL);
 		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
 		on SunsynkConfiguration(id=SunsynkConfiguration.create()): config {
-			on SunsynkDevices(id=SunsynkDevices.create(config.inverterId)): devices {		
+			on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk"+config.inverterId)): devices {		
 				on SunsynkDataCollector(id=SunsynkDataCollector.create(config.username, config.password, config.inverterId)): collector {
 					on all wait(60.*5.) {
 						collector.getFlow(flowToMeasurement);
-						collector.getLoad(ResponseToMeasurement(devices.sunsynkDeviceId, "sunsynkLoad", "loadError", [{"data.dailyUsed":["sunsynkHome", "loadDailyUsage", "kW"]}]).exec);
-						collector.getGrid(ResponseToMeasurement(devices.sunsynkDeviceId, "sunsynkGrid", "gridError", [{"data.etodayFrom":["sunsynkGrid", "gridDailyUsage", "kW"]}]).exec);
-						collector.getInput(ResponseToMeasurement(devices.sunsynkDeviceId, "sunsynkPV", "pvError", [{"data.etoday":["sunsynkPV", "pvDailyGen", "kW"]}]).exec);
+						collector.getLoad(ResponseToMeasurement(devices.deviceId, "sunsynkLoad", "loadError", [{"data.dailyUsed":["sunsynkHome", "loadDailyUsage", "kW"]}]).exec);
+						collector.getGrid(ResponseToMeasurement(devices.deviceId, "sunsynkGrid", "gridError", [{"data.etodayFrom":["sunsynkGrid", "gridDailyUsage", "kW"]}]).exec);
+						collector.getInput(ResponseToMeasurement(devices.deviceId, "sunsynkPV", "pvError", [{"data.etoday":["sunsynkPV", "pvDailyGen", "kW"]}]).exec);
 					}
 				}
 			}
@@ -298,11 +298,11 @@ monitor SunsynkDataCollectorMonitor
 			};
 			m.time := currentTime;
 			m.type := "sunsynkFlow";
-			m.source := devices.sunsynkDeviceId;
+			m.source := devices.deviceId;
 			send m to Measurement.SEND_CHANNEL;
 		} else {
 			Alarm a := new Alarm;
-			a.source := devices.sunsynkDeviceId;
+			a.source := devices.deviceId;
 			a.severity := "MINOR";
 			a.type := "flowError";
 			a.status := "ACTIVE";
