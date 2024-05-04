@@ -1,0 +1,321 @@
+using com.softwareag.connectivity.httpclient.HttpTransport;
+using com.softwareag.connectivity.httpclient.HttpOptions;
+using com.softwareag.connectivity.httpclient.Request;
+using com.softwareag.connectivity.httpclient.Response;
+using com.apama.json.JSONPlugin;
+using com.apama.correlator.timeformat.TimeFormat;
+using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementValue;
+using com.apama.cumulocity.FindTenantOptions;
+using com.apama.cumulocity.FindTenantOptionsResponse;
+using com.apama.cumulocity.TenantOption;
+using com.apama.cumulocity.FindManagedObject;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+using com.apama.cumulocity.ManagedObject;
+using com.apama.cumulocity.ObjectCommitted;
+using com.apama.cumulocity.ObjectCommitFailed;
+using com.apama.cumulocity.Util;
+using com.apama.util.AnyExtractor;
+using com.apama.functional.Functional;
+using com.apama.functional.Fn;
+
+event SunsynkRequest {
+	constant string URLBASE := "api.sunsynk.net";
+	static action create(string method, string url, any data, string token) returns SunsynkRequest
+	{
+		SunsynkRequest request := new SunsynkRequest;
+		request.headers := {
+				"content-type": "application/json",
+				"accept": "application/json"
+			};
+		request.method := method;
+		request.url := url;
+		request.data := data;
+		if token != "" {
+			request.headers["Authorization"] := "Bearer "+token;
+		}
+		
+		return request;
+	}
+ 	action execute(action<Response> handler)
+ 	{
+ 		HttpTransport transport := HttpTransport.getOrCreate(URLBASE, 443);
+ 		HttpOptions options := new HttpOptions;
+ 		options.headers := headers;
+ 		Request req := transport.createRequest(method, url, data, options);
+ 		req.execute(handler);
+ 	}
+	string method;
+	string url;
+	any data;
+	dictionary<string, string> headers;
+}
+
+event SunsynkConfiguration {
+	constant string CREATED_CHANNEL := "SunsynkConfiguration.created";
+	static action create() returns integer
+	{
+		SunsynkConfiguration config := new SunsynkConfiguration;
+		config.id := integer.getUnique();
+		monitor.subscribe(FindTenantOptionsResponse.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		on FindTenantOptionsResponse(reqId=reqId) as resp {
+			monitor.unsubscribe(FindTenantOptionsResponse.SUBSCRIBE_CHANNEL);
+			TenantOption t;
+			for t in resp.options {
+				if t.key = "username" {
+					config.username := t.value;
+				}
+				if t.key = "password" {
+					config.password := t.value;
+				}
+				if t.key = "inverterId" {
+					config.inverterId := t.value;
+				}
+			}
+			if config.username != "" and config.password != "" and config.inverterId != "" {
+				log "Starting sunsynk monitoring username "+config.username+" inverterId "+config.inverterId;
+				send config to CREATED_CHANNEL;
+			} else {
+				log "Error, missing configuraton, define tenant options apamax.sunsynk.username, apamax.sunsynk.password, apamax.sunsynk.inverterId" at ERROR;
+			}
+		}
+		send FindTenantOptions(reqId, false, "apamax.sunsynk", "", new dictionary<string, string>) to FindTenantOptions.SEND_CHANNEL;
+		return config.id;
+	}
+	integer id;
+	string username;
+	string password;
+	string inverterId;
+}
+
+event SunsynkDevices {
+	constant string CREATED_CHANNEL := "SunsynkDevices.created";
+	static action create(string inverterId) returns integer
+	{
+		SunsynkDevices devices := new SunsynkDevices;
+		devices.id := integer.getUnique();
+		monitor.subscribe(FindManagedObjectResponse.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		Fn.getAllEvents("com.apama.cumulocity.FindManagedObjectResponse", {"reqId":<any>reqId}, "com.apama.cumulocity.FindManagedObjectResponseAck", {"reqId":<any>reqId}, Fn.partial(devices.checkForManagedObject, inverterId));
+		send FindManagedObject(reqId, "", {"type":"sunsynkInvertor"}) to FindManagedObject.SEND_CHANNEL;
+		return devices.id;
+	}
+	action checkForManagedObject(string inverterId, sequence<FindManagedObjectResponse> responses) {
+		FindManagedObjectResponse resp;
+		for resp in responses {
+			if resp.managedObject.name = "sunsynk"+inverterId {
+				log "Found Managed Object "+resp.managedObject.toString();
+				sunsynkDeviceId := resp.managedObject.id;
+				send self to CREATED_CHANNEL;
+				return;
+			}
+		}
+		monitor.subscribe(ManagedObject.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		on ObjectCommitted(reqId=reqId) as oc and not ObjectCommitFailed(reqId=reqId) {
+			sunsynkDeviceId := oc.id;
+			log "Created managed Object "+oc.id;
+			send self to CREATED_CHANNEL;
+		}
+		on ObjectCommitFailed(reqId=reqId) as ocf and not ObjectCommitted(reqId=reqId) {
+			log "Failure creating managed object: "+ocf.body.valueToString() at ERROR;
+		}
+		send (<ManagedObject>Fn.setFields(new ManagedObject, {"type":"sunsynkInvertor", "name":"sunsynk"+inverterId})).withChannelResponse(reqId, new dictionary<string, string>) to ManagedObject.SEND_CHANNEL;
+	}
+	integer id;
+	string sunsynkDeviceId;
+}
+
+event SunsynkDataCollector {
+	constant string CREATED_CHANNEL := "SunsynkDataCollector.created";
+	static action create(string username, string password, string inverter) returns integer
+	{
+		SunsynkDataCollector collector := new SunsynkDataCollector;
+		collector.id := integer.getUnique();
+		collector.inverter := inverter;
+		SunsynkRequest req := SunsynkRequest.create("POST", "/oauth/token", {
+			"username": username,
+			"password": password,
+			"grant_type": "password",
+			"client_id": "csp-web",
+			"areaCode": "sunsynk",
+			"source": "sunsynk"
+		}, "");
+		req.execute(collector.setToken);
+		return collector.id;
+	}
+	action setToken(Response r)
+	{
+		token := r.payload.getStringOr("data.access_token", "");
+		send self to CREATED_CHANNEL;
+	}
+	action getLoad(action<Response> handler)
+	{
+		SunsynkRequest.create("GET", "/api/v1/inverter/load/"+inverter+"/realtime?sn="+inverter, new any, token).execute(handler);
+	}
+	action getGrid(action<Response> handler)
+	{
+		SunsynkRequest.create("GET", "/api/v1/inverter/grid/"+inverter+"/realtime?sn="+inverter, new any, token).execute(handler);
+	}
+	action getInput(action<Response> handler)
+	{
+		SunsynkRequest.create("GET", "/api/v1/inverter/"+inverter+"/realtime/input", new any, token).execute(handler);
+	}
+	action getOutput(action<Response> handler)
+	{
+		SunsynkRequest.create("GET", "/api/v1/inverter/"+inverter+"/realtime/output", new any, token).execute(handler);
+	}
+	action getBattery(action<Response> handler)
+	{
+		SunsynkRequest.create("GET", "/api/v1/inverter/battery/"+inverter+"/realtime?sn="+inverter+"&lan=en", new any, token).execute(handler);
+	}
+	action getFlow(action<Response> handler)
+	{
+		SunsynkRequest.create("GET", "/api/v1/inverter/"+inverter+"/flow", new any, token).execute(handler);
+	}
+	action getInverter(action<Response> handler)
+	{
+		SunsynkRequest.create("GET", "/api/v1/inverter/"+inverter, new any, token).execute(handler);
+	}
+	action getSettings(action<Response> handler)
+	{
+		SunsynkRequest.create("GET", "/api/v1/common/setting/"+inverter+"/read", new any, token).execute(handler);
+	}
+	action getMessages(action<Response> handler)
+	{
+		SunsynkRequest.create("GET", "/api/v1/message/count", new any, token).execute(handler);
+	}
+	action getWeather(action<Response> handler, string date, string long, string lat)
+	{
+		SunsynkRequest.create("GET", "/api/v1/weather?lan=en&date="+date+"&lonLat="+long+","+lat, new any, token).execute(handler);
+	}
+	integer id;
+	string inverter;
+	string token;
+}
+
+event ResponseToMeasurement
+{
+	string source;
+	string type;
+	string errortype;
+	sequence<dictionary<string, sequence<string>>> points;
+	action exec(Response r) {
+		if r.payload.getBoolean("success") {
+			Measurement m := new Measurement;
+			dictionary<string, sequence<string>> point;
+			for point in points {
+				string k;
+				for k in point.keys() {
+					float value := r.payload.getAnyOr(k, "").valueToString().toFloat();
+					sequence<string> resdescr := point[k];
+					dictionary<string, MeasurementValue> mvs := m.measurements.getOr(resdescr[0], new dictionary<string, MeasurementValue>);
+					mvs[resdescr[1]] := MeasurementValue(value, resdescr[2], new dictionary<string, any>);
+					m.measurements[resdescr[0]] := mvs;
+				}
+			}
+			m.time := currentTime;
+			m.type := type;
+			m.source := source;
+			send m to Measurement.SEND_CHANNEL;
+		} else {
+			Alarm a := new Alarm;
+			a.source := source;
+			a.severity := "MINOR";
+			a.type := errortype;
+			a.status := "ACTIVE";
+			a.text := r.payload.data.valueToString();
+			send a to Alarm.SEND_CHANNEL;
+		}
+	}
+}
+
+monitor SunsynkDataCollectorMonitor
+{
+	SunsynkDataCollector collector;
+	SunsynkConfiguration config;
+	SunsynkDevices devices;
+	action onload()
+	{
+		monitor.subscribe(SunsynkDataCollector.CREATED_CHANNEL);
+		monitor.subscribe(SunsynkConfiguration.CREATED_CHANNEL);
+		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
+		on SunsynkConfiguration(id=SunsynkConfiguration.create()): config {
+			on SunsynkDevices(id=SunsynkDevices.create(config.inverterId)): devices {		
+				on SunsynkDataCollector(id=SunsynkDataCollector.create(config.username, config.password, config.inverterId)): collector {
+					on all wait(60.*5.) {
+						collector.getFlow(flowToMeasurement);
+						collector.getLoad(ResponseToMeasurement(devices.sunsynkDeviceId, "sunsynkLoad", "loadError", [{"data.dailyUsed":["sunsynkHome", "loadDailyUsage", "kW"]}]).exec);
+						collector.getGrid(ResponseToMeasurement(devices.sunsynkDeviceId, "sunsynkGrid", "gridError", [{"data.etodayFrom":["sunsynkGrid", "gridDailyUsage", "kW"]}]).exec);
+						collector.getInput(ResponseToMeasurement(devices.sunsynkDeviceId, "sunsynkPV", "pvError", [{"data.etoday":["sunsynkPV", "pvDailyGen", "kW"]}]).exec);
+					}
+				}
+			}
+		}
+	}
+	action flowToMeasurement(Response r)
+	{
+		if r.payload.getBoolean("success") {
+			float loadPower := r.payload.getFloat("data.homeLoadPower");
+			float battPower := r.payload.getFloat("data.battPower");
+			if r.payload.getBoolean("data.toBat") {
+				battPower := -battPower;
+			}
+			float pvPower := 0.0;
+			sequence<any> pv := r.payload.getSequence("data.pv");
+			any a;
+			for a in pv {
+				dictionary<any, any> d := <dictionary<any, any>> a;
+				if <boolean> d["toInv"] = true {
+					pvPower := d["power"].valueToString().toFloat();
+				}
+			}
+			
+			
+			float gridPower := r.payload.getFloat("data.gridOrMeterPower");
+			if r.payload.getBoolean("data.toGrid") {
+				gridPower := -gridPower;
+			}
+			float battCharge := r.payload.getFloat("data.soc");
+			Measurement m := new Measurement;
+			m.measurements := {
+				"sunsynkBattery": {
+					"batteryCharge": MeasurementValue(battCharge, "percent", new dictionary<string, any>),
+					"batteryPower": MeasurementValue(battPower, "W", new dictionary<string, any>)
+				},
+				"sunsynkPV": {
+					"pvPower": MeasurementValue(pvPower, "W", new dictionary<string, any>)
+				},
+				"sunsynkGrid": {
+					"gridPower": MeasurementValue(gridPower, "W", new dictionary<string, any>)
+				},
+				"sunsynkHome": {
+					"loadPower": MeasurementValue(loadPower, "W", new dictionary<string, any>)
+				}
+			};
+			m.time := currentTime;
+			m.type := "sunsynkFlow";
+			m.source := devices.sunsynkDeviceId;
+			send m to Measurement.SEND_CHANNEL;
+		} else {
+			Alarm a := new Alarm;
+			a.source := devices.sunsynkDeviceId;
+			a.severity := "MINOR";
+			a.type := "flowError";
+			a.status := "ACTIVE";
+			a.text := r.payload.data.valueToString();
+			send a to Alarm.SEND_CHANNEL;
+		}
+	}
+	action printResponse(Response r)
+	{
+		log JSONPlugin.toJSON(r.payload.data) at INFO;
+	}
+}
+
+
+
+
