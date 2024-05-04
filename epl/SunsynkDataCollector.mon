@@ -82,7 +82,7 @@ event SunsynkConfiguration {
 			
 			send config to CREATED_CHANNEL;
 		}
-		send FindTenantOpations(reqId, false, category, "", new dictionary<string, string>) to FindTenantOptions.SEND_CHANNEL;
+		send FindTenantOptions(reqId, false, category, "", new dictionary<string, string>) to FindTenantOptions.SEND_CHANNEL;
 		return config.id;
 	}
 	integer id;
