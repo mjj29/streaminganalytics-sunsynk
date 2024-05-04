@@ -123,7 +123,7 @@ event SunsynkDevices {
 		on ObjectCommitFailed(reqId=reqId) as ocf and not ObjectCommitted(reqId=reqId) {
 			log "Failure creating managed object: "+ocf.body.valueToString() at ERROR;
 		}
-		send (<ManagedObject>Fn.setFields(new ManagedObject, {"type":"sunsynkInvertor", "name":"sunsynk"+inverterId})).withChannelResponse(reqId, new dictionary<string, string>) to ManagedObject.SEND_CHANNEL;
+		send (<ManagedObject>Fn.setFields(new ManagedObject, {"type":"sunsynkInvertor", "name":"sunsynk"+inverterId, "params": {"c8y_IsDevice":<any>new dictionary<any, any>}})).withChannelResponse(reqId, new dictionary<string, string>) to ManagedObject.SEND_CHANNEL;
 	}
 	integer id;
 	string sunsynkDeviceId;
