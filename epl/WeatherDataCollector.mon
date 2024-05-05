@@ -5,7 +5,7 @@ using com.softwareag.connectivity.httpclient.Response;
 using com.apama.json.JSONPlugin;
 using com.apama.correlator.timeformat.TimeFormat;
 using com.apama.cumulocity.Alarm;
-using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementFragment;
 using com.apama.cumulocity.MeasurementValue;
 using com.apama.cumulocity.FindTenantOptions;
 using com.apama.cumulocity.FindTenantOptionsResponse;
@@ -97,55 +97,25 @@ event SunsynkDevices {
 }
 
 event WeatherDataCollector {
-	constant string CREATED_CHANNEL := "WeatherDataCollector.created";
-	constant string API_BASE := "";	
-	static action create(string username, string password, string inverter) returns integer
+	constant string API_BASE := "api.open-meteo.com";	
+	static action create(string latlong, string timezone) returns WeatherDataCollector
 	{
 		WeatherDataCollector collector := new WeatherDataCollector;
-		collector.id := integer.getUnique();
-		collector.client := HttpTransport.getOrCreate(API_BASE, 443);
-		
-		return collector.id;
+		sequence<string> latlongseq := ",".split(latlong);
+		collector.lat := latlongseq[0];
+		collector.long := latlongseq[1];
+		collector.timezone := timezone;
+		return collector;
 	}
-
-	HttpTransport client;
+	action getDailyWeatherPrediction(action<Response> handler) {
+		HttpTransport client := HttpTransport.getOrCreate(API_BASE, 443);
+		client.createGETRequest("/v1/forecast?latitude="+lat+"&longitude="+long+"&hourly=cloud_cover&daily=sunshine_duration&timezone="+timezone.replaceAll("/", "%2F")+"&forecast_days=2").execute(handler);
+	}
+	string lat;
+	string long;
+	string timezone;
 }
 
-event ResponseToMeasurement
-{
-	string source;
-	string type;
-	string errortype;
-	sequence<dictionary<string, sequence<string>>> points;
-	action exec(Response r) {
-		if r.payload.getBoolean("success") {
-			Measurement m := new Measurement;
-			dictionary<string, sequence<string>> point;
-			for point in points {
-				string k;
-				for k in point.keys() {
-					float value := r.payload.getAnyOr(k, "").valueToString().toFloat();
-					sequence<string> resdescr := point[k];
-					dictionary<string, MeasurementValue> mvs := m.measurements.getOr(resdescr[0], new dictionary<string, MeasurementValue>);
-					mvs[resdescr[1]] := MeasurementValue(value, resdescr[2], new dictionary<string, any>);
-					m.measurements[resdescr[0]] := mvs;
-				}
-			}
-			m.time := currentTime;
-			m.type := type;
-			m.source := source;
-			send m to Measurement.SEND_CHANNEL;
-		} else {
-			Alarm a := new Alarm;
-			a.source := source;
-			a.severity := "MINOR";
-			a.type := errortype;
-			a.status := "ACTIVE";
-			a.text := r.payload.data.valueToString();
-			send a to Alarm.SEND_CHANNEL;
-		}
-	}
-}
 
 monitor WeatherDataCollectorMonitor
 {
@@ -154,17 +124,49 @@ monitor WeatherDataCollectorMonitor
 	SunsynkDevices devices;
 	action onload()
 	{
-		monitor.subscribe(WeatherDataCollector.CREATED_CHANNEL);
 		monitor.subscribe(SunsynkConfiguration.CREATED_CHANNEL);
 		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
-		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.weather", ["location"])): config {
+		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.weather", ["location", "timezone"])): config {
 			on SunsynkDevices(id=SunsynkDevices.create("weatherData", "weatherData"+config.options["location"])): devices {		
-				on WeatherDataCollector(id=WeatherDataCollector.create(config.options["location"])): collector {
-					on all wait(60.*5.) {
-						
-					}
+				WeatherDataCollector collector := WeatherDataCollector.create(config.options["location"], config.options["timezone"]);
+				on all at(0, 22, *, *, *) {
+					collector.getDailyWeatherPrediction(weatherToMeasurement);
 				}
 			}
+		}
+	}
+	action weatherToMeasurement(Response r)
+	{
+		sequence<any> days := r.payload.getSequence("daily.time");
+		sequence<any> sunshine_duration := r.payload.getSequence("daily.sunshine_duration");
+		integer i := 0;
+		while i < days.size() {
+			float time := TimeFormat.parseTimeWithTimeZone("yyyy-MM-dd", <string>days[i], collector.timezone);
+			if time > currentTime {
+				send MeasurementFragment("", "weatherData", devices.deviceId, 
+				                         time,
+				                         "weatherForecast", "sunshine_duration", 
+				                         <float> sunshine_duration[i], r.payload.getString("daily_units.sunshine_duration"), 
+				                         new dictionary<string, any>) to MeasurementFragment.SEND_CHANNEL;
+			}
+			i := i + 1;
+		}
+		
+		string cloud_units := r.payload.getString("hourly_units.cloud_cover");
+		
+		sequence<any> timestamps := r.payload.getSequence("hourly.time");
+		sequence<any> cloud_cover := r.payload.getSequence("hourly.cloud_cover");
+		i := 0;
+		while i < timestamps.size() {
+			float time := TimeFormat.parseTimeWithTimeZone("yyyy-MM-dd'T'HH:mm", <string>timestamps[i], collector.timezone);
+			if time > currentTime {
+				send MeasurementFragment("", "weatherData", devices.deviceId, 
+				                         time,
+				                         "weatherForecast", "cloud_cover", 
+				                         cloud_cover[i].valueToString().toFloat(), cloud_units, 
+				                         new dictionary<string, any>) to MeasurementFragment.SEND_CHANNEL;	
+			}
+			i := i + 1;
 		}
 	}
 	action printResponse(Response r)
