@@ -20,7 +20,6 @@ using com.apama.cumulocity.Util;
 using com.apama.util.AnyExtractor;
 using com.apama.functional.Functional;
 using com.apama.functional.Fn;
-using com.apama.util.Base64;
 
 
 event SunsynkConfiguration {
