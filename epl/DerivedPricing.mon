@@ -1,12 +1,17 @@
+using com.apama.cumulocity.Measurement;
 using com.apama.cumulocity.MeasurementFragment;
 using com.apama.cumulocity.FindManagedObject;
 using com.apama.cumulocity.FindManagedObjectResponse;
 using com.apama.cumulocity.FindManagedObjectResponseAck;
+using com.apama.cumulocity.FindMeasurement;
+using com.apama.cumulocity.FindMeasurementResponse;
+using com.apama.cumulocity.FindMeasurementResponseAck;
 using com.apama.cumulocity.ManagedObject;
 using com.apama.cumulocity.ObjectCommitted;
 using com.apama.cumulocity.ObjectCommitFailed;
 using com.apama.cumulocity.Util;
 using com.apama.functional.Fn;
+using com.apama.functional.Functional;
 
 event SunsynkDevices {
 	constant string CREATED_CHANNEL := "SunsynkDevices.created";
@@ -54,16 +59,37 @@ monitor DerivedPriceCalculatorMonitor
 		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
 		on SunsynkDevices(id=SunsynkDevices.create("derivedPricing", "derivedPricing")): devices {		
 			monitor.subscribe(MeasurementFragment.SUBSCRIBE_CHANNEL);
+			getLatestPrices();
+			on all MeasurementFragment(type="octopusPrices", valueSeries="currentPrice") as mf { log "Got current price: "+mf.toString(); }
+			on all MeasurementFragment(type="sunsynkFlow", valueSeries="gridPower") as mf { log "Got grid flow update: "+mf.toString(); }
+			on all MeasurementFragment(type="sunsynkGrid", valueSeries="gridDailyUsage") as mf { log "Got grid flow update: "+mf.toString(); }
 			from m in all MeasurementFragment(type="octopusPrices", valueSeries="currentPrice") partition by m.valueFragment retain 1
 			from p in all MeasurementFragment(type="sunsynkFlow", valueFragment="sunsynkGrid", valueSeries="gridPower")
 			select MeasurementFragment("", "costRate", devices.deviceId, currentTime, m.valueFragment, "currentPriceRate", (p.value*m.value)/100., "gbp/hr", new dictionary<string, any>) as m {
+				log "Sending currentPriceRate "+m.toString();
 				send m to MeasurementFragment.SEND_CHANNEL;
 			}
 			from m in all MeasurementFragment(type="octopusPrices", valueSeries="currentPrice") partition by m.valueFragment retain 1
 			from p in all MeasurementFragment(type="sunsynkGrid", valueFragment="sunsynkGrid", valueSeries="gridDailyUsage")
 			select MeasurementFragment("", "costRate", devices.deviceId, currentTime, m.valueFragment, "dailyCost", (p.value*m.value)/100., "gbp", new dictionary<string, any>) as m {
+				log "Sending dailyCost "+m.toString();
 				send m to MeasurementFragment.SEND_CHANNEL;
 			}				
+		}
+	}
+	action getLatestPrices() {
+		integer reqId := Util.generateReqId();
+		Fn.getAllEvents("com.apama.cumulocity.FindMeasurementResponse", {"reqId":<any>reqId}, "com.apama.cumulocity.FindMeasurementResponseAck", {"reqId":<any>reqId}, handleLatestPrices);
+		send FindMeasurement(reqId, {"type":"octopusPrices", "valueFragmentSeries":"currentPrice", "dateFrom":(currentTime-(24.*3600.)).toString(), "dateTo":currentTime.toString() }) to FindMeasurement.SEND_CHANNEL;
+	}
+	action handleLatestPrices(sequence<FindMeasurementResponse> responses)
+	{
+		FindMeasurementResponse r;
+		for r in responses {
+			MeasurementFragment f;
+			for f in r.measurement.getFragments() {
+				send f to MeasurementFragment.SUBSCRIBE_CHANNEL;
+			}
 		}
 	}
 }
