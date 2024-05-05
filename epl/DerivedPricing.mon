@@ -53,6 +53,7 @@ monitor DerivedPriceCalculatorMonitor
 	{
 		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
 		on SunsynkDevices(id=SunsynkDevices.create("derivedPricing", "derivedPricing")): devices {		
+			monitor.subscribe(MeasurementFragment.SUBSCRIBE_CHANNEL);
 			from m in all MeasurementFragment(type="octopusPrices", valueSeries="currentPrice") partition by m.valueFragment retain 1
 			from p in all MeasurementFragment(type="sunsynkFlow", valueFragment="sunsynkGrid", valueSeries="gridPower")
 			select MeasurementFragment("", "costRate", devices.deviceId, currentTime, m.valueFragment, "currentPriceRate", (p.value*m.value)/100., "gbp/hr", new dictionary<string, any>) as m {
