@@ -6,6 +6,7 @@ using com.apama.json.JSONPlugin;
 using com.apama.correlator.timeformat.TimeFormat;
 using com.apama.cumulocity.Alarm;
 using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementFragment;
 using com.apama.cumulocity.MeasurementValue;
 using com.apama.cumulocity.FindTenantOptions;
 using com.apama.cumulocity.FindTenantOptionsResponse;
@@ -20,6 +21,7 @@ using com.apama.cumulocity.Util;
 using com.apama.util.AnyExtractor;
 using com.apama.functional.Functional;
 using com.apama.functional.Fn;
+using com.apama.functional.Partial;
 
 
 event SunsynkConfiguration {
@@ -97,8 +99,9 @@ event SunsynkDevices {
 event GetTariffData {
 	HttpTransport client;
 	integer count;
-	action<dictionary<string, any>> handler;
-	dictionary<string, any> results;
+	action<dictionary<string, sequence<any>>> handler;
+	boolean future;
+	dictionary<string, sequence<any>> results;
 	action exec(Response r)
 	{
 		string url := <string> (<sequence<any>>Functional(r.payload.getDictionary("single_register_electricity_tariffs._A").values()[0].getEntry("links"))
@@ -110,13 +113,17 @@ event GetTariffData {
 	{
 		switch (r.payload.data.getEntry("next") as next) {
 			case string: {
+				Partial timeConstraint;
+				if future {
+					timeConstraint := Fn.partial(checkTimeAfter, ["valid_from", currentTime]);
+				} else {
+					timeConstraint := Fn.partial(checkTimeWithin, ["valid_from", "valid_to", currentTime]);
+				}
 				string code := next.replace(".*/products/(.*)/electricity-tariffs/.*", "$1");
-				results[code] := (<sequence<float>> Functional(r.payload.getSequence("results"))
+				results[code] := <sequence<any>> Functional(r.payload.getSequence("results"))
 					.map(Fn.partial(parseTimeField, "valid_from"))
 					.map(Fn.partial(parseTimeField, "valid_to"))
-					.filter(Fn.partial(checkTimeWithin, ["valid_from", "valid_to", currentTime]))
-					.map(Fn.getEntry("value_inc_vat"))
-					.map(Fn.toType("float")).get())[0];
+					.filter(timeConstraint).get();
 			}
 			default: {
 				count := count - 1;
@@ -133,6 +140,10 @@ event GetTariffData {
 	action checkTimeWithin(string fromFieldName, string toFieldName, float time, any object) returns boolean
 	{
 		return time > <float> object.getField(fromFieldName) and time < <float> object.getField(toFieldName);
+	}
+	action checkTimeAfter(string fromFieldName, float time, any object) returns boolean
+	{
+		return <float> object.getField(fromFieldName) > time;
 	}
 }
 
@@ -166,58 +177,33 @@ event OctopusPriceCollector {
 	{
 		return list.contains(<string>object.getEntry(fieldName));
 	}
-	action getCurrentPrices(action<dictionary<string, any>> handler)
+	action getCurrentPrices(action<dictionary<string, sequence<any>>> handler)
 	{
 		sequence<com.softwareag.connectivity.httpclient.Request> _;
 		HttpTransport client := HttpTransport.getOrCreateWithConfigurations(API_BASE, 443, {HttpTransport.CONFIG_USERNAME:apikey, HttpTransport.CONFIG_TLS:"true"});
-		GetTariffData tariffHandler := GetTariffData(client, productCodes.size(), handler, new dictionary<string, any>);
+		GetTariffData tariffHandler := GetTariffData(client, productCodes.size(), handler, false, new dictionary<string, sequence<any>>);
 		Functional(productCodes)
 			.map(Fn.partial(Fn.concat, "/v1/products/"))
 			.map(client.createGETRequest)
 			.map(Fn.callAction("execute", tariffHandler.exec));
 	}
-	
+	action getFuturePrices(action<dictionary<string, sequence<any>>> handler)
+	{
+		sequence<com.softwareag.connectivity.httpclient.Request> _;
+		HttpTransport client := HttpTransport.getOrCreateWithConfigurations(API_BASE, 443, {HttpTransport.CONFIG_USERNAME:apikey, HttpTransport.CONFIG_TLS:"true"});
+		GetTariffData tariffHandler := GetTariffData(client, productCodes.size(), handler, true, new dictionary<string, sequence<any>>);
+		Functional(productCodes)
+			.map(Fn.partial(Fn.concat, "/v1/products/"))
+			.map(client.createGETRequest)
+			.map(Fn.callAction("execute", tariffHandler.exec));
+	}	
 	integer id;
 	string apikey;
 	string products;
 	sequence<string> productCodes;
 }
 
-event ResponseToMeasurement
-{
-	string source;
-	string type;
-	string errortype;
-	sequence<dictionary<string, sequence<string>>> points;
-	action exec(Response r) {
-		if r.payload.getBoolean("success") {
-			Measurement m := new Measurement;
-			dictionary<string, sequence<string>> point;
-			for point in points {
-				string k;
-				for k in point.keys() {
-					float value := r.payload.getAnyOr(k, "").valueToString().toFloat();
-					sequence<string> resdescr := point[k];
-					dictionary<string, MeasurementValue> mvs := m.measurements.getOr(resdescr[0], new dictionary<string, MeasurementValue>);
-					mvs[resdescr[1]] := MeasurementValue(value, resdescr[2], new dictionary<string, any>);
-					m.measurements[resdescr[0]] := mvs;
-				}
-			}
-			m.time := currentTime;
-			m.type := type;
-			m.source := source;
-			send m to Measurement.SEND_CHANNEL;
-		} else {
-			Alarm a := new Alarm;
-			a.source := source;
-			a.severity := "MINOR";
-			a.type := errortype;
-			a.status := "ACTIVE";
-			a.text := r.payload.data.valueToString();
-			send a to Alarm.SEND_CHANNEL;
-		}
-	}
-}
+
 
 monitor OctopusPriceCollectorMonitor
 {
@@ -232,24 +218,35 @@ monitor OctopusPriceCollectorMonitor
 		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.octopus", ["apiKey", "products"])): config {
 			on SunsynkDevices(id=SunsynkDevices.create("octopusPrices", "octopusPrices")): devices {		
 				on OctopusPriceCollector(id=OctopusPriceCollector.create(config.options["apiKey"], config.options["products"])): collector {
-					on all wait(60.*5.) {
+					on all at(*/30, *, *, *, *) {
 						collector.getCurrentPrices(pricesToMeasurement);
+						collector.getFuturePrices(futurePricesToMeasurement);
 					}
 				}
 			}
 		}
 	}
-	action pricesToMeasurement(dictionary<string, any> a)
+	action pricesToMeasurement(dictionary<string, sequence<any>> a)
 	{
 		Measurement m := new Measurement;
 		string product;
 		for product in a.keys() {
-			m.measurements[product] := { "currentPrice": MeasurementValue(<float>a[product], "pence", new dictionary<string, any>) };
+			m.measurements[product] := { "currentPrice": MeasurementValue(<float>a[product][0].getEntry("value_inc_vat"), "pence", new dictionary<string, any>) };
 		}
 		m.time := currentTime;
 		m.type := "octopusPrices";
 		m.source := devices.deviceId;
 		send m to Measurement.SEND_CHANNEL;
+	}
+	action futurePricesToMeasurement(dictionary<string, sequence<any>> a)
+	{
+		string product;
+		for product in a.keys() {
+			any fp;
+			for fp in a[product] {
+				send MeasurementFragment("","octopusFuturePrices",devices.deviceId, <float>fp.getEntry("valid_from"), product, "futurePrice", <float>fp.getEntry("value_inc_vat"), "pence", new dictionary<string, any>) to MeasurementFragment.SEND_CHANNEL;
+			}
+		}
 	}
 	action printResponse(Response r)
 	{
