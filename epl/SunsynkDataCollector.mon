@@ -288,7 +288,7 @@ monitor SunsynkDataCollectorMonitor
 		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
 		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["username", "password", "inverterId"])): config {
 			log "Starting sunsynk monitoring username "+config.options["username"]+" inverterId "+config.options["inverterId"];
-			on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk"+config.options["inverterId"])): devices {		
+			on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk"+config.options["inverterId"], ["operationType"])): devices {		
 				on SunsynkDataCollector(id=SunsynkDataCollector.create(config.options["username"], config.options["password"], config.options["inverterId"])): collector {
 					on all wait(60.*5.) {
 						collector.getFlow(flowToMeasurement);
