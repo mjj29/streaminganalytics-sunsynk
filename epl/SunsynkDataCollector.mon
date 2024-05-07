@@ -298,7 +298,7 @@ monitor SunsynkDataCollectorMonitor
 					}
 					monitor.subscribe(Operation.SUBSCRIBE_CHANNEL);
 					on all Operation(source=devices.deviceId, status="PENDING") as op {
-						op.status = "EXECUTING";
+						op.status := "EXECUTING";
 						send op to Operation.SEND_CHANNEL;
 						if <string>op.params["operationType"] = "PowerUp" {
 							collector.setOneOffChargePeriod(<string>op.params["start"], <string>op.params["end"]);
@@ -306,7 +306,7 @@ monitor SunsynkDataCollectorMonitor
 						if <string>op.params["operationType"] = "SetConfiguration" {
 							collector.setSettings(<dictionary<string, string>> op.params["settings"]);
 						}
-						op.status = "SUCCESSFUL";
+						op.status := "SUCCESSFUL";
 						send op to Operation.SEND_CHANNEL;
 					}
 					send Operation("", devices.deviceId, "PENDING", {"operationType":<any>"PowerUp", "start":"13:00", "end":"15:00"}) to Operation.SEND_CHANNEL;
