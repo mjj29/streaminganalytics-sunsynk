@@ -182,6 +182,32 @@ event SunsynkDataCollector {
 	{
 		SunsynkRequest.create("GET", "/api/v1/common/setting/"+inverter+"/read", new any, token).execute(handler);
 	}
+	/**
+	newSettings = {
+		"batteryRestartCap":"4",
+		"batteryLowCap":"4",
+		"batteryShutdownCap":"4",
+		"cap1": "20",
+		"cap2": "4",
+		"cap3": "4",
+		"cap4": "4",
+		"cap5": "4",
+		"cap6": "20",
+		"time1On": "1",
+		"time2On": "0",
+		"time3On": "0",
+		"time4On": "0",
+		"time5On": "0",
+		"time6On": "1",
+		"sellTime3": "11:50",
+		"sellTime4": "14:10",
+		"sellTime5": "18:18"
+	}
+	*/
+	action setSettings(dictionary<string, string> newSettings)
+	{
+		SunsynkRequest.create("POST", "/api/v1/common/setting/"+inverter+"/set", newSettings, token).execute(_);
+	}
 	action getMessages(action<Response> handler)
 	{
 		SunsynkRequest.create("GET", "/api/v1/message/count", new any, token).execute(handler);
@@ -190,6 +216,7 @@ event SunsynkDataCollector {
 	{
 		SunsynkRequest.create("GET", "/api/v1/weather?lan=en&date="+date+"&lonLat="+long+","+lat, new any, token).execute(handler);
 	}
+	action _(Response r) { }
 	integer id;
 	string inverter;
 	string token;
