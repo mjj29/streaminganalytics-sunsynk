@@ -18,6 +18,7 @@ using com.apama.cumulocity.ObjectCommitted;
 using com.apama.cumulocity.ObjectCommitFailed;
 using com.apama.cumulocity.Operation;
 using com.apama.cumulocity.Util;
+using com.apama.cumulocity.SendEmail;
 using com.apama.util.AnyExtractor;
 using com.apama.functional.Functional;
 using com.apama.functional.Fn;
@@ -122,7 +123,7 @@ event SunsynkDevices {
 		on ObjectCommitFailed(reqId=reqId) as ocf and not ObjectCommitted(reqId=reqId) {
 			log "Failure creating managed object: "+ocf.body.valueToString() at ERROR;
 		}
-		send (<ManagedObject>Fn.setFields(new ManagedObject, {"type":type, "name":name, "params": {"c8y_IsDevice":<any>new dictionary<any, any>, "c8y_supportedOperations": operations}})).withChannelResponse(reqId, new dictionary<string, string>) to ManagedObject.SEND_CHANNEL;
+		send (<ManagedObject>Fn.setFields(new ManagedObject, {"type":type, "name":name, "params": {"c8y_IsDevice":<any>new dictionary<any, any>, "com_cumulocity_model_Agent":new dictionary<any, any>, "c8y_supportedOperations": operations}})).withChannelResponse(reqId, new dictionary<string, string>) to ManagedObject.SEND_CHANNEL;
 	}
 	integer id;
 	string deviceId;
@@ -130,11 +131,12 @@ event SunsynkDevices {
 
 event SunsynkDataCollector {
 	constant string CREATED_CHANNEL := "SunsynkDataCollector.created";
-	static action create(string username, string password, string inverter) returns integer
+	static action create(string username, string password, string inverter, string notificationEmail) returns integer
 	{
 		SunsynkDataCollector collector := new SunsynkDataCollector;
 		collector.id := integer.getUnique();
 		collector.inverter := inverter;
+		collector.notificationEmail := notificationEmail;
 		SunsynkRequest req := SunsynkRequest.create("POST", "/oauth/token", {
 			"username": username,
 			"password": password,
@@ -183,16 +185,37 @@ event SunsynkDataCollector {
 	{
 		SunsynkRequest.create("GET", "/api/v1/common/setting/"+inverter+"/read", new any, token).execute(handler);
 	}
-	action setOneOffChargePeriod(string start, string end)
+	action setOneOffChargePeriod(string date, string start, string end)
 	{
-		setSettings({
-		"sellTime3": start,
-		"sellTime4": end,
-		"time3On": "1",
-		"time4On": "0",
-		"cap3": "100",
-		"cap4": "4"});
-		on at (0,0,*,*,*) {
+		float startDay := TimeFormat.parseTime("yyyy-MM-dd", date);
+		float todayDay := TimeFormat.parseTime("yyyy-MM-dd", TimeFormat.format(currentTime, "yyyy-MM-dd"));
+		string emailMessage := "";
+		if startDay < todayDay {
+			log "setOneOffChargePeriod asked for a day in the past: "+date at ERROR;
+		} else if startDay <= currentTime {
+			sendNotificationEmail("Setting PowerUp for today at "+start+" until "+end);
+			setSettings({
+				"sellTime3": start,
+				"sellTime4": end,
+				"time3On": "1",
+				"time4On": "0",
+				"cap3": "100",
+				"cap4": "4"});
+		} else {
+			sendNotificationEmail("Setting PowerUp for "+date+" at "+start+" until "+end);
+			on wait (startDay-currentTime) {
+				sendNotificationEmail("Enabling PowerUp at "+start+" until "+end);
+				setSettings({
+					"sellTime3": start,
+					"sellTime4": end,
+					"time3On": "1",
+					"time4On": "0",
+					"cap3": "100",
+					"cap4": "4"});
+			}
+		}
+		on wait(startDay+(3600.*24.)-currentTime) {
+			sendNotificationEmail("Disabling PowerUp");
 			setSettings({
 				"time3On": "0",
 				"time4On": "0",
@@ -234,10 +257,17 @@ event SunsynkDataCollector {
 	{
 		SunsynkRequest.create("GET", "/api/v1/weather?lan=en&date="+date+"&lonLat="+long+","+lat, new any, token).execute(handler);
 	}
+	action sendNotificationEmail(string message)
+	{
+		SendEmail se := SendEmail(message, "Sunsynk control event for inverter "+inverter+":<br/>"+message+"<br/>Yours etc,</br>Sunsynk management bot.", "", [notificationEmail], new sequence<string>, "", new dictionary<string, string>);
+		log se.toString();
+		send se to SendEmail.SEND_CHANNEL;
+	}
 	action _(Response r) { }
 	integer id;
 	string inverter;
 	string token;
+	string notificationEmail;
 }
 
 event ResponseToMeasurement
@@ -286,10 +316,10 @@ monitor SunsynkDataCollectorMonitor
 		monitor.subscribe(SunsynkDataCollector.CREATED_CHANNEL);
 		monitor.subscribe(SunsynkConfiguration.CREATED_CHANNEL);
 		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
-		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["username", "password", "inverterId"])): config {
+		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["username", "password", "inverterId", "notificationEmail"])): config {
 			log "Starting sunsynk monitoring username "+config.options["username"]+" inverterId "+config.options["inverterId"];
-			on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk"+config.options["inverterId"], ["operationType"])): devices {		
-				on SunsynkDataCollector(id=SunsynkDataCollector.create(config.options["username"], config.options["password"], config.options["inverterId"])): collector {
+			on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk"+config.options["inverterId"], ["PowerUp","SetConfiguration"])): devices {		
+				on SunsynkDataCollector(id=SunsynkDataCollector.create(config.options["username"], config.options["password"], config.options["inverterId"], config.options["notificationEmail"])): collector {
 					on all wait(60.*5.) {
 						collector.getFlow(flowToMeasurement);
 						collector.getLoad(ResponseToMeasurement(devices.deviceId, "sunsynkLoad", "loadError", [{"data.dailyUsed":["sunsynkHome", "loadDailyUsage", "kW"]}]).exec);
@@ -299,17 +329,23 @@ monitor SunsynkDataCollectorMonitor
 					monitor.subscribe(Operation.SUBSCRIBE_CHANNEL);
 					on all Operation(source=devices.deviceId, status="PENDING") as op {
 						op.status := "EXECUTING";
+						log op.toString();
 						send op to Operation.SEND_CHANNEL;
-						if <string>op.params["operationType"] = "PowerUp" {
-							collector.setOneOffChargePeriod(<string>op.params["start"], <string>op.params["end"]);
+						AnyExtractor ae := AnyExtractor(op.params);
+						if op.params.hasKey("PowerUp") {
+							collector.setOneOffChargePeriod(ae.getString("PowerUp.parameters.date"), ae.getString("PowerUp.parameters.start"), ae.getString("PowerUp.parameters.end"));
 						}
-						if <string>op.params["operationType"] = "SetConfiguration" {
-							collector.setSettings(<dictionary<string, string>> op.params["settings"]);
+						else if op.params.hasKey("SetConfiguration") {
+							collector.setSettings(<dictionary<string, string>> ae.getAny("PowerUp.parameters.settings"));
+						}
+						else {
+							log "Unknown operation "+op.toString() at ERROR;
 						}
 						op.status := "SUCCESSFUL";
+						log op.toString();
 						send op to Operation.SEND_CHANNEL;
 					}
-					send Operation("", devices.deviceId, "PENDING", {"operationType":<any>"PowerUp", "start":"13:00", "end":"15:00"}) to Operation.SEND_CHANNEL;
+					//send Operation("", devices.deviceId, "PENDING", {"PowerUp":<any>{"name":"Set Powerup", "description":"Powerup on 2024-05-08 from 13:00 to 15:00", "date":"2024-05-08", "start":"13:00", "end":"15:00"}}) to Operation.SEND_CHANNEL;
 				}
 			}
 		}
