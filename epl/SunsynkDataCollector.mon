@@ -345,7 +345,7 @@ monitor SunsynkDataCollectorMonitor
 						log op.toString();
 						send op to Operation.SEND_CHANNEL;
 					}
-					//send Operation("", devices.deviceId, "PENDING", {"description":"Powerup on 2024-05-08 from 13:00 to 15:00", "PowerUp":<any>{"name":"Set Powerup", "date":"2024-05-08", "start":"13:00", "end":"15:00"}}) to Operation.SEND_CHANNEL;
+					send Operation("", devices.deviceId, "PENDING", {"description":"Powerup on 2024-05-09 from 12:00 to 14:00", "PowerUp":<any>{"name":"Set Powerup", "parameters":{"date":"2024-05-09", "start":"12:00", "end":"14:00"}}}) to Operation.SEND_CHANNEL;
 				}
 			}
 		}
