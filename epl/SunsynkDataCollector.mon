@@ -190,6 +190,7 @@ event SunsynkDataCollector {
 		float startDay := TimeFormat.parseTime("yyyy-MM-dd", date);
 		float todayDay := TimeFormat.parseTime("yyyy-MM-dd", TimeFormat.format(currentTime, "yyyy-MM-dd"));
 		string emailMessage := "";
+		log "startDay: "+startDay.toString+" todayDay: "+todayDay.toString()+" currentTime: "+currentTime.toString();
 		if startDay < todayDay {
 			log "setOneOffChargePeriod asked for a day in the past: "+date at ERROR;
 		} else if startDay <= currentTime {
@@ -203,6 +204,7 @@ event SunsynkDataCollector {
 				"cap4": "4"});
 		} else {
 			sendNotificationEmail("Setting PowerUp for "+date+" at "+start+" until "+end);
+			log "on wait "+(startDay-currentTime).toString();
 			on wait (startDay-currentTime) {
 				sendNotificationEmail("Enabling PowerUp at "+start+" until "+end);
 				setSettings({
