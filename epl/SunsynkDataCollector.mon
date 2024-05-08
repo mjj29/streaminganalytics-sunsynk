@@ -187,8 +187,8 @@ event SunsynkDataCollector {
 	}
 	action setOneOffChargePeriod(string date, string start, string end)
 	{
-		float startDay := TimeFormat.parseTime("yyyy-MM-dd", date);
-		float todayDay := TimeFormat.parseTime("yyyy-MM-dd", TimeFormat.format(currentTime, "yyyy-MM-dd"));
+		float startDay := TimeFormat.parseTimeWithTimeZone("yyyy-MM-dd", date, "Europe/London");
+		float todayDay := TimeFormat.parseTimeWithTimeZone("yyyy-MM-dd", TimeFormat.formatWithTimeZone(currentTime, "yyyy-MM-dd", "Europe/London"), "Europe/London");
 		string emailMessage := "";
 		log "startDay: "+startDay.toString()+" todayDay: "+todayDay.toString()+" currentTime: "+currentTime.toString();
 		if startDay < todayDay {
