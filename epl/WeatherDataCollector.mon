@@ -109,7 +109,7 @@ event WeatherDataCollector {
 	}
 	action getDailyWeatherPrediction(action<Response> handler) {
 		HttpTransport client := HttpTransport.getOrCreate(API_BASE, 443);
-		client.createGETRequest("/v1/forecast?latitude="+lat+"&longitude="+long+"&hourly=cloud_cover_low&daily=sunshine_duration&timezone="+timezone.replaceAll("/", "%2F")+"&forecast_days=2").execute(handler);
+		client.createGETRequest("/v1/forecast?latitude="+lat+"&longitude="+long+"&hourly=cloud_cover_low,cloud_cover_mid,cloud_cover_high&daily=sunshine_duration&timezone="+timezone.replaceAll("/", "%2F")+"&forecast_days=2").execute(handler);
 	}
 	string lat;
 	string long;
@@ -152,19 +152,26 @@ monitor WeatherDataCollectorMonitor
 			i := i + 1;
 		}
 		
-		string cloud_units := r.payload.getString("hourly_units.cloud_cover_low");
-		
 		sequence<any> timestamps := r.payload.getSequence("hourly.time");
-		sequence<any> cloud_cover := r.payload.getSequence("hourly.cloud_cover_low");
 		i := 0;
 		while i < timestamps.size() {
 			float time := TimeFormat.parseTimeWithTimeZone("yyyy-MM-dd'T'HH:mm", <string>timestamps[i], collector.timezone);
 			if time > currentTime {
-				send MeasurementFragment("", "weatherData", devices.deviceId, 
-				                         time,
-				                         "weatherForecast", "cloud_cover", 
-				                         cloud_cover[i].valueToString().toFloat(), cloud_units, 
-				                         new dictionary<string, any>) to MeasurementFragment.SEND_CHANNEL;	
+				Measurement m := new Measurement;
+				m.time := time;
+				m.type := "weatherData";
+				m.source := devices.deviceId;
+				dictionary<string, MeasurementValue> measurements := new dictionary<string, MeasurementValue>;
+				
+				string cloud_cover_type;
+				for cloud_cover_type in ["cloud_cover_low", "cloud_cover_high", "cloud_cover_mid"] {
+					string cloud_units := r.payload.getString("hourly_units."+cloud_cover_type);
+					sequence<any> cloud_cover := r.payload.getSequence("hourly."+cloud_cover_type);
+					m[cloud_cover_type] := MeasurementValue(cloud_cover[i].valueToString().toFloat(), cloud_units, 
+				                         new dictionary<string, any>);
+				}
+				m.measurements["weatherForecast"] := measurements;
+				send m to Measurement.SEND_CHANNEL;
 			}
 			i := i + 1;
 		}
