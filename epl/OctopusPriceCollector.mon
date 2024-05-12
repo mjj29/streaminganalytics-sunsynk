@@ -101,6 +101,7 @@ event GetTariffData {
 	integer count;
 	action<dictionary<string, sequence<any>>> handler;
 	boolean future;
+	float lastUpdateTime;
 	dictionary<string, sequence<any>> results;
 	action exec(Response r)
 	{
@@ -115,9 +116,9 @@ event GetTariffData {
 			case string: {
 				Partial timeConstraint;
 				if future {
-					timeConstraint := Fn.partial(checkTimeAfter, ["valid_from", currentTime]);
+					timeConstraint := Fn.partial(checkTimeAfter, ["valid_from", lastUpdateTime]);
 				} else {
-					timeConstraint := Fn.partial(checkTimeWithin, ["valid_from", "valid_to", currentTime]);
+					timeConstraint := Fn.partial(checkTimeWithin, ["valid_from", "valid_to", lastUpdateTime]);
 				}
 				string code := next.replace(".*/products/(.*)/electricity-tariffs/.*", "$1");
 				results[code] := <sequence<any>> Functional(r.payload.getSequence("results"))
@@ -181,7 +182,7 @@ event OctopusPriceCollector {
 	{
 		sequence<com.softwareag.connectivity.httpclient.Request> _;
 		HttpTransport client := HttpTransport.getOrCreateWithConfigurations(API_BASE, 443, {HttpTransport.CONFIG_USERNAME:apikey, HttpTransport.CONFIG_TLS:"true"});
-		GetTariffData tariffHandler := GetTariffData(client, productCodes.size(), handler, false, new dictionary<string, sequence<any>>);
+		GetTariffData tariffHandler := GetTariffData(client, productCodes.size(), handler, false, currentTime, new any, new dictionary<string, sequence<any>>);
 		Functional(productCodes)
 			.map(Fn.partial(Fn.concat, "/v1/products/"))
 			.map(client.createGETRequest)
@@ -191,16 +192,20 @@ event OctopusPriceCollector {
 	{
 		sequence<com.softwareag.connectivity.httpclient.Request> _;
 		HttpTransport client := HttpTransport.getOrCreateWithConfigurations(API_BASE, 443, {HttpTransport.CONFIG_USERNAME:apikey, HttpTransport.CONFIG_TLS:"true"});
-		GetTariffData tariffHandler := GetTariffData(client, productCodes.size(), handler, true, new dictionary<string, sequence<any>>);
+
+		GetTariffData tariffHandler := GetTariffData(client, productCodes.size(), handler, true, futurePriceUpdateTime, setFuturePriceUpdateTime, new dictionary<string, sequence<any>>);
+
 		Functional(productCodes)
 			.map(Fn.partial(Fn.concat, "/v1/products/"))
 			.map(client.createGETRequest)
 			.map(Fn.callAction("execute", tariffHandler.exec));
 	}	
+	action setFuturePriceUpdateTime(float t) { futurePriceUpdateTime := t; }
 	integer id;
 	string apikey;
 	string products;
 	sequence<string> productCodes;
+	float futurePriceUpdateTime;
 }
 
 
@@ -241,12 +246,17 @@ monitor OctopusPriceCollectorMonitor
 	action futurePricesToMeasurement(dictionary<string, sequence<any>> a)
 	{
 		string product;
+		float latestTime := currentTime;
 		for product in a.keys() {
 			any fp;
 			for fp in a[product] {
+				if <float>fp.getEntry("valid_from") > latestTime {
+					latestTime := <float>fp.getEntry("valid_from");
+				}
 				send MeasurementFragment("","octopusFuturePrices",devices.deviceId, <float>fp.getEntry("valid_from"), product, "futurePrice", <float>fp.getEntry("value_inc_vat"), "pence", new dictionary<string, any>) to MeasurementFragment.SEND_CHANNEL;
 			}
 		}
+		collector.setFuturePriceUpdateTime(latestTime);
 	}
 	action printResponse(Response r)
 	{
