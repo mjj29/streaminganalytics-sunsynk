@@ -5,6 +5,7 @@ using com.softwareag.connectivity.httpclient.Response;
 using com.apama.json.JSONPlugin;
 using com.apama.correlator.timeformat.TimeFormat;
 using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.Measurement;
 using com.apama.cumulocity.MeasurementFragment;
 using com.apama.cumulocity.MeasurementValue;
 using com.apama.cumulocity.FindTenantOptions;
