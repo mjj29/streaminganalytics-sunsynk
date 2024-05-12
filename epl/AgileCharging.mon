@@ -244,7 +244,7 @@ monitor AgileChargingManagerMonitor
 		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["notificationEmail", "numChargingTimes"])): sunsyncConfig {
 			on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.octopus", ["currentProductId"])): octopusConfig {
 				getPricesForCharging(octopusConfig.options["currentProductId"], currentTime);
-				on all at(*, 22, *, *, *) {
+				on all at(0, 22, *, *, *) {
 					getPricesForCharging(octopusConfig.options["currentProductId"], currentTime);
 				}
 			}
