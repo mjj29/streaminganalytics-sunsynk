@@ -145,6 +145,10 @@ event SunsynkDataCollector {
 			"source": "sunsynk"
 		}, "");
 		req.execute(collector.setToken);
+		// regenerate the token every day
+		on all wait(3600.*24.) {
+			req.execute(collector.setToken);
+		}
 		return collector.id;
 	}
 	action setToken(Response r)
