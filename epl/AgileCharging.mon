@@ -1,0 +1,308 @@
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementFragment;
+using com.apama.cumulocity.FindTenantOptions;
+using com.apama.cumulocity.FindTenantOptionsResponse;
+using com.apama.cumulocity.FindMeasurement;
+using com.apama.cumulocity.FindMeasurementResponse;
+using com.apama.cumulocity.FindMeasurementResponseAck;
+using com.apama.cumulocity.TenantOption;
+using com.apama.cumulocity.SendEmail;
+using com.apama.cumulocity.Util;
+using com.apama.functional.Fn;
+using com.apama.functional.Functional;
+using com.apama.correlator.timeformat.TimeFormat;
+
+/** A comparator for a heap containing integers. 
+ */
+event HeapFloatComparator
+{
+	/** True for a min-heap, false for a max-heap. */
+	boolean increasing;
+	/** Compare two integers.
+	 * @returns Positive if increasing and a > b, or not increasing and a < b, 0 if equal and negative otherwise.
+	 * @param a The first integer to compare.
+	 * @param b The second integer to compare.
+	 */
+	action compare(any a, any b) returns integer
+	{
+		float af := <float> a;
+		float bf := <float> b;
+		if af = bf { return 0; }
+		else if increasing and af > bf { return 1; }
+		else if not increasing and af < bf { return 1; }
+		else { return -1; }
+	}
+}
+
+/**
+ * A Max/Min-value Heap object with configurable type comparators.
+ *
+ * Create with a comparator object determining the Heap order and comparison function.
+ * 
+ * Several built-in comparators are available.
+ *
+ * @see HeapIntegerFieldComparator
+ * @see HeapIntegerComparator
+ * @see HeapStringComparator
+ */
+event Heap
+{
+	/** Create an empty heap with the given comparator.
+	 * The comparator determines if this is a min-heap or a max-heap and how to compare the values.
+	 * @param comparator A Comparator object with a <tt>compare</tt> action with the signature <tt>action&lt;any, any&gt; returns integer</tt>.
+	 */
+	static action create(any comparator) returns Heap
+	{
+		Heap h := new Heap;
+		h.data := new sequence<any>;
+		h.comparator := <action<any, any> returns integer> comparator.getAction("compare");
+		return h;
+	}
+	/** Create an in-place heap on the given sequence, with the given comparator.
+	 * The comparator determines if this is a min-heap or a max-heap and how to compare the values.
+	 * @param data A sequence which will be heapified in-place and further heap operations will be made on the array.
+	 * @param comparator A Comparator object with a <tt>compare</tt> action with the signature <tt>action&lt;any, any&gt; returns integer</tt>.
+	 */
+	static action heapify(sequence<any> data, any comparator) returns Heap
+	{
+		Heap h := new Heap;
+		h.data := data;
+		h.comparator := <action<any, any> returns integer> comparator.getAction("compare");
+		h.makeHeap();
+		return h;
+	}
+
+	/** Return the top value from the heap, according to its comparator. */
+	action peekTop() returns any
+	{
+		return data[0];
+	}
+
+	/** Remove and return the top value from the heap, according to its comparator, maintaining the heap. */
+	action pop() returns any
+	{
+		any t := data[0];
+		data[0] := data[data.size()-1];
+		data.remove(data.size()-1);
+		heapifyDown(0);
+		return t;
+	}
+
+	/** Push a new value into the heap, maintaining the heap. 
+	 * @param val The value to add to the heap.
+	 */
+	action push(any val)
+	{
+		data.append(val);
+		heapifyUp(data.size()-1);
+	}
+
+	/** Returns true if the heap is empty. */
+	action empty() returns boolean
+	{
+		return data.size() = 0;
+	}
+
+	/** Returns the number of values in the heap. */
+	action size() returns integer
+	{
+		return data.size();
+	}
+
+	/** @private */
+	action swap(integer a, integer b)
+	{
+		any tmp := data[a];
+		data[a] := data[b];
+		data[b] := tmp;
+	}
+
+	/** @private */
+	action parentOf(integer index) returns integer
+	{
+		return (index-1)/2;
+	}
+
+	/** @private */
+	action leftChildOf(integer index) returns integer
+	{
+		integer child := (index*2)+1;
+		if child >= data.size() { return -1; }
+		else { return child; }
+	}
+
+	/** @private */
+	action rightChildOf(integer index) returns integer
+	{
+		integer child := (index+1)*2;
+		if child >= data.size() { return -1; }
+		else { return child; }
+	}
+
+	/** @private */
+	action heapifyDown(integer index)
+	{
+		integer leftChild := leftChildOf(index);
+		integer rightChild := rightChildOf(index);
+		integer largestNode := index;
+		if leftChild > 0 and comparator(data[leftChild], data[largestNode]) < 0 {
+			largestNode := leftChild;
+		}
+		if rightChild > 0 and comparator(data[rightChild], data[largestNode]) < 0 {
+			largestNode := rightChild;
+		}
+		if largestNode != index {
+			swap(index, largestNode);
+			heapifyDown(largestNode);
+		}
+	}
+
+	/** @private */
+	action heapifyUp(integer index)
+	{
+		integer parent := parentOf(index);
+		if index > 0 and comparator(data[index], data[parent]) < 0 {
+			swap(index, parent);
+			heapifyUp(parent);
+		}
+	}
+
+	/** @private */
+	action makeHeap()
+	{
+		integer lastNonLeaf := (data.size()/2)-1;
+		while lastNonLeaf >= 0 {
+			heapifyDown(lastNonLeaf);
+			lastNonLeaf := lastNonLeaf - 1;
+		}
+	}
+
+	/** @private */
+	sequence<any> data;
+	/** @private */
+	action<any, any> returns integer comparator;
+}
+
+event SunsynkConfiguration {
+	constant string CREATED_CHANNEL := "SunsynkConfiguration.created";
+	static action create(string category, sequence<string> options) returns integer
+	{
+		SunsynkConfiguration config := new SunsynkConfiguration;
+		config.id := integer.getUnique();
+		monitor.subscribe(FindTenantOptionsResponse.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		on FindTenantOptionsResponse(reqId=reqId) as resp {
+			monitor.unsubscribe(FindTenantOptionsResponse.SUBSCRIBE_CHANNEL);
+			TenantOption t;
+			for t in resp.options {
+				string k;
+				for k in options {
+					if t.key = k {
+						config.options[k] := t.value;
+					}
+				}
+			}
+			string k;
+			for k in options {
+				if not config.options.hasKey(k) {
+					log "Error, missing configuration, define the following tenant options in the "+category+" category: "+options.toString() at ERROR;
+					return;
+				}
+			}
+			
+			send config to CREATED_CHANNEL;
+		}
+		send FindTenantOptions(reqId, false, category, "", new dictionary<string, string>) to FindTenantOptions.SEND_CHANNEL;
+		return config.id;
+	}
+	integer id;
+	dictionary<string, string> options;
+}
+
+event IsUniqueTimestamp
+{
+	float lastSeen;
+	action checkUnique(Measurement m) returns boolean
+	{
+		if lastSeen = m.time {
+			return false;
+		} else {
+			lastSeen := m.time;
+			return true;
+		}
+	}
+}
+
+monitor AgileChargingManagerMonitor
+{
+	SunsynkConfiguration sunsyncConfig;
+	SunsynkConfiguration octopusConfig;
+	sequence<string> products;
+	action onload()
+	{
+		monitor.subscribe(SunsynkConfiguration.CREATED_CHANNEL);
+		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["notificationEmail", "numChargingTimes"])): sunsyncConfig {
+			on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.octopus", ["currentProductId"])): octopusConfig {
+				getPricesForCharging(octopusConfig.options["currentProductId"], currentTime);
+				on all at(*, 22, *, *, *) {
+					getPricesForCharging(octopusConfig.options["currentProductId"], currentTime);
+				}
+			}
+		}
+	}
+	action getPricesForCharging(string product, float dayStart)
+	{
+		integer reqId := Util.generateReqId();
+		monitor.subscribe(FindMeasurementResponse.SUBSCRIBE_CHANNEL);
+		string message := "Charging times for "+product+" between "+TimeFormat.format(dayStart, "yyyy-MM-dd HH:mm:ss")+" and "+TimeFormat.format(dayStart+(3600.*24.), "yyyy-MM-dd HH:mm:ss");
+		log message;
+		Fn.getAllEvents("com.apama.cumulocity.FindMeasurementResponse", {"reqId":<any>reqId}, "com.apama.cumulocity.FindMeasurementResponseAck", {"reqId":<any>reqId}, Fn.partial(calculateChargingTimes, [message, product]));
+		send FindMeasurement(reqId, {"type":"octopusFuturePrices", "valueFragmentType":product, "valueFragmentSeries":"futurePrice", "dateFrom":dayStart.toString(), "dateTo":(dayStart+(3600.*24.)).toString()}) to FindMeasurement.SEND_CHANNEL;
+	}
+	action calculateChargingTimes(string message, string product, sequence<FindMeasurementResponse> resps)
+	{
+		sequence<Measurement> uniqueMeasurements := <sequence<Measurement>> Functional(resps)
+			.map(Fn.getEntry("measurement"))
+			.filter(IsUniqueTimestamp(0.).checkUnique)
+			.map(Fn.toType("com.apama.cumulocity.Measurement"))
+			.get();
+		
+		sequence<float> allPrices := <sequence<float>> Functional(uniqueMeasurements)
+			.map(Fn.getEntry("measurements"))
+			.map(Fn.getEntry(product))
+			.map(Fn.getEntry("futurePrice"))
+			.map(Fn.getEntry("value"))
+			.map(Fn.toType("float")).get();
+		
+		Heap thresholdPrices := <Heap> Fn.reduceFrom(
+		    Heap.create(HeapFloatComparator(false)), 
+		    allPrices,
+			Fn.partial(calculateMinimumThreshold, sunsyncConfig.options["numChargingTimes"].toInteger()));
+		
+		float thresholdPrice := (<float> Fn.reduce(thresholdPrices.data, float.max))+0.01;
+		log "Calculated threshold price of "+thresholdPrice.toString();
+		
+		sequence<string> chargeTimes := <sequence<string>> Functional(uniqueMeasurements)
+			.filter(Fn.partial(priceLessThanThreshold, [product, thresholdPrice]))
+			.map(Fn.getEntry("time"))
+			.map(Fn.partial(TimeFormat.format, [Fn.$(1), "HH:mm"])).get();
+		
+		log "Will charge at times: "+chargeTimes.toString();
+		
+		send SendEmail(message, message+"<br/>Calculated threshold price of "+thresholdPrice.toString()+"<br/>Will charge at times: "+chargeTimes.toString()+"<br/>Yours etc,</br>Sunsynk management bot.", "", [sunsyncConfig.options["notificationEmail"]], new sequence<string>, "", new dictionary<string, string>) to SendEmail.SEND_CHANNEL;
+ 
+		
+	}
+	action priceLessThanThreshold(string product, float price, Measurement m) returns boolean
+	{
+		return m.measurements[product]["futurePrice"].value <= price;
+	}
+	action calculateMinimumThreshold(integer nSegments, Heap prices, float p) returns Heap
+	{
+		while prices.size() >= nSegments and <float>prices.peekTop() > p {
+			prices.pop();
+		}
+		if prices.size() < nSegments or p <= <float> prices.peekTop() { prices.push(p); }
+		return prices;
+	}
+}
