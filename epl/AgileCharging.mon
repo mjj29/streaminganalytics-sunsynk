@@ -280,6 +280,9 @@ monitor AgileChargingManagerMonitor
 			Fn.partial(calculateMinimumThreshold, sunsyncConfig.options["numChargingTimes"].toInteger()));
 		
 		float thresholdPrice := (<float> Fn.reduce(thresholdPrices.data, float.max))+0.01;
+		if thresholdPrice < 0. {
+			thresholdPrice := 0.;
+		}
 		log "Calculated threshold price of "+thresholdPrice.toString();
 		
 		sequence<string> chargeTimes := <sequence<string>> Functional(uniqueMeasurements)
