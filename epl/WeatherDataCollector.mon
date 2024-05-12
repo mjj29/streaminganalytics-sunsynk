@@ -129,6 +129,7 @@ monitor WeatherDataCollectorMonitor
 		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.weather", ["location", "timezone"])): config {
 			on SunsynkDevices(id=SunsynkDevices.create("weatherData", "weatherData"+config.options["location"])): devices {		
 				WeatherDataCollector collector := WeatherDataCollector.create(config.options["location"], config.options["timezone"]);
+				collector.getDailyWeatherPrediction(weatherToMeasurement);
 				on all at(0, 22, *, *, *) {
 					collector.getDailyWeatherPrediction(weatherToMeasurement);
 				}
