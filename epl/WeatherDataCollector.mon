@@ -169,7 +169,7 @@ monitor WeatherDataCollectorMonitor
 				for cloud_cover_type in ["cloud_cover_low", "cloud_cover_high", "cloud_cover_mid"] {
 					string cloud_units := r.payload.getString("hourly_units."+cloud_cover_type);
 					sequence<any> cloud_cover := r.payload.getSequence("hourly."+cloud_cover_type);
-					m[cloud_cover_type] := MeasurementValue(cloud_cover[i].valueToString().toFloat(), cloud_units, 
+					measurements[cloud_cover_type] := MeasurementValue(cloud_cover[i].valueToString().toFloat(), cloud_units, 
 				                         new dictionary<string, any>);
 				}
 				m.measurements["weatherForecast"] := measurements;
