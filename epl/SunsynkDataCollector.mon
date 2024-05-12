@@ -131,11 +131,10 @@ event SunsynkDevices {
 
 event SunsynkDataCollector {
 	constant string CREATED_CHANNEL := "SunsynkDataCollector.created";
-	static action create(string username, string password, string inverter, string notificationEmail) returns integer
+	static action create(string username, string password, string notificationEmail) returns integer
 	{
 		SunsynkDataCollector collector := new SunsynkDataCollector;
 		collector.id := integer.getUnique();
-		collector.inverter := inverter;
 		collector.notificationEmail := notificationEmail;
 		SunsynkRequest req := SunsynkRequest.create("POST", "/oauth/token", {
 			"username": username,
@@ -151,6 +150,16 @@ event SunsynkDataCollector {
 	action setToken(Response r)
 	{
 		token := r.payload.getStringOr("data.access_token", "");
+		SunsynkRequest.create("GET", "/api/v1/plants?page=1&limit=1", new any, token).execute(setPlantId);
+	}
+	action setPlantId(Response r)
+	{
+		plantId := r.payload.getSequence("data.infos")[0].getEntry("id").valueToString();
+		SunsynkRequest.create("GET", "/api/v1/inverters?page=1&limit=1&type=-1&status=1", new any, token).execute(setInverterId);
+	}
+	action setInverterId(Response r)
+	{
+		inverter := r.payload.getSequence("data.infos")[0].getEntry("sn").valueToString();
 		send self to CREATED_CHANNEL;
 	}
 	action getLoad(action<Response> handler)
@@ -173,6 +182,7 @@ event SunsynkDataCollector {
 	{
 		SunsynkRequest.create("GET", "/api/v1/inverter/battery/"+inverter+"/realtime?sn="+inverter+"&lan=en", new any, token).execute(handler);
 	}
+
 	action getFlow(action<Response> handler)
 	{
 		SunsynkRequest.create("GET", "/api/v1/inverter/"+inverter+"/flow", new any, token).execute(handler);
@@ -259,6 +269,10 @@ event SunsynkDataCollector {
 	{
 		SunsynkRequest.create("GET", "/api/v1/weather?lan=en&date="+date+"&lonLat="+long+","+lat, new any, token).execute(handler);
 	}
+	action getPlant(action<Response> handler)
+	{
+		SunsynkRequest.create("GET", "/api/v1/plant/"+plantId+"?lan=en", new any, token).execute(handler);
+	}
 	action sendNotificationEmail(string message)
 	{
 		SendEmail se := SendEmail(message, "Sunsynk control event for inverter "+inverter+":<br/>"+message+"<br/>Yours etc,</br>Sunsynk management bot.", "", [notificationEmail], new sequence<string>, "", new dictionary<string, string>);
@@ -270,6 +284,7 @@ event SunsynkDataCollector {
 	string inverter;
 	string token;
 	string notificationEmail;
+	string plantId;
 }
 
 event ResponseToMeasurement
@@ -313,15 +328,24 @@ monitor SunsynkDataCollectorMonitor
 	SunsynkDataCollector collector;
 	SunsynkConfiguration config;
 	SunsynkDevices devices;
+	integer inverterMaxRate;
+	float maxBatteryCapacity;
+	string timezone;
+	float pvMaxPower;
+	float lat;
+	float long;
 	action onload()
 	{
 		monitor.subscribe(SunsynkDataCollector.CREATED_CHANNEL);
 		monitor.subscribe(SunsynkConfiguration.CREATED_CHANNEL);
 		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
 		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["username", "password", "inverterId", "notificationEmail"])): config {
-			log "Starting sunsynk monitoring username "+config.options["username"]+" inverterId "+config.options["inverterId"];
-			on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk"+config.options["inverterId"], ["PowerUp","SetConfiguration"])): devices {		
-				on SunsynkDataCollector(id=SunsynkDataCollector.create(config.options["username"], config.options["password"], config.options["inverterId"], config.options["notificationEmail"])): collector {
+			on SunsynkDataCollector(id=SunsynkDataCollector.create(config.options["username"], config.options["password"], config.options["notificationEmail"])): collector {
+				on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk"+collector.inverter, ["PowerUp","SetConfiguration"])): devices {
+					log "Starting sunsynk monitoring username "+config.options["username"]+" inverterId "+collector.inverter;		
+					collector.getInverter(parseInverterConfig);
+					collector.getPlant(parsePlantConfig);
+					collector.getBattery(parseBatteryConfig);
 					on all wait(60.*5.) {
 						collector.getFlow(flowToMeasurement);
 						collector.getLoad(ResponseToMeasurement(devices.deviceId, "sunsynkLoad", "loadError", [{"data.dailyUsed":["sunsynkHome", "loadDailyUsage", "kW"]}]).exec);
@@ -351,6 +375,27 @@ monitor SunsynkDataCollectorMonitor
 				}
 			}
 		}
+	}
+	action parsePlantConfig(Response r)
+	{
+		pvMaxPower := r.payload.getFloat("data.realtime.totalPower");
+		timezone := r.payload.getString("data.timezone.code");
+		lat := r.payload.getFloat("data.lat");
+		long := r.payload.getFloat("data.lon");
+		log "Max PV power: "+pvMaxPower.toString()+" kW";
+		log "Timezone: "+timezone+" location: "+lat.toString()+","+long.toString();
+	}
+	action parseInverterConfig(Response r)
+	{
+		inverterMaxRate := r.payload.getInteger("data.ratePower");
+		log "Max inverter rated power: "+inverterMaxRate.toString()+" W";
+	}
+	action parseBatteryConfig(Response r)
+	{
+		float capacityAmpHours := r.payload.getString("data.capacity").toFloat();
+		float voltage := r.payload.getString("data.voltage").toFloat();
+		maxBatteryCapacity := capacityAmpHours * voltage / 1000.;
+		log "Max battery capacity: "+maxBatteryCapacity.toString()+" kWh";
 	}
 	action flowToMeasurement(Response r)
 	{
