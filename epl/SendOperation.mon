@@ -33,9 +33,48 @@ using com.apama.cumulocity.ObjectCommitFailed;
 using com.apama.cumulocity.Util;
 using com.apama.util.AnyExtractor;
 
-monitor MySampleMonitor {
+event SunsynkDevices {
+	constant string CREATED_CHANNEL := "SunsynkDevices.created";
+	static action create(string type, string name, sequence<string> operations) returns integer
+	{
+		SunsynkDevices devices := new SunsynkDevices;
+		devices.id := integer.getUnique();
+		monitor.subscribe(FindManagedObjectResponse.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		Fn.getAllEvents("com.apama.cumulocity.FindManagedObjectResponse", {"reqId":<any>reqId}, "com.apama.cumulocity.FindManagedObjectResponseAck", {"reqId":<any>reqId}, Fn.partial(devices.checkForManagedObject, [type, name, operations]));
+		send FindManagedObject(reqId, "", {"type":type}) to FindManagedObject.SEND_CHANNEL;
+		return devices.id;
+	}
+	action checkForManagedObject(string type, string name, sequence<string> operations, sequence<FindManagedObjectResponse> responses) {
+		FindManagedObjectResponse resp;
+		for resp in responses {
+			if resp.managedObject.name = name {
+				log "Found Managed Object "+resp.managedObject.toString();
+				deviceId := resp.managedObject.id;
+				send self to CREATED_CHANNEL;
+				return;
+			}
+		}
+		monitor.subscribe(ManagedObject.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		on ObjectCommitted(reqId=reqId) as oc and not ObjectCommitFailed(reqId=reqId) {
+			deviceId := oc.id;
+			log "Created managed Object "+oc.id;
+			send self to CREATED_CHANNEL;
+		}
+		on ObjectCommitFailed(reqId=reqId) as ocf and not ObjectCommitted(reqId=reqId) {
+			log "Failure creating managed object: "+ocf.body.valueToString() at ERROR;
+		}
+		send (<ManagedObject>Fn.setFields(new ManagedObject, {"type":type, "name":name, "params": {"c8y_IsDevice":<any>new dictionary<any, any>, "com_cumulocity_model_Agent":new dictionary<any, any>, "c8y_supportedOperations": operations}})).withChannelResponse(reqId, new dictionary<string, string>) to ManagedObject.SEND_CHANNEL;
+	}
+	integer id;
+	string deviceId;
+}
+
+monitor SendOperationMonitor {
 	/** Initialize the application */
 	action onload() {
+		
 		send Operation("", devices.deviceId, "PENDING", {"description":"Powerup on 2024-05-14 from 12:00 to 14:00", "PowerUp":<any>{"name":"Set Powerup", "parameters":{"date":"2024-05-14", "start":"12:00", "end":"14:00"}}}) to Operation.SEND_CHANNEL;
 	}
 }
