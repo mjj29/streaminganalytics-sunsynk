@@ -1,0 +1,53 @@
+/** Basic event definitions */
+using com.apama.cumulocity.ManagedObject;
+using com.apama.cumulocity.FindManagedObject;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementValue;
+using com.apama.cumulocity.MeasurementFragment;
+using com.apama.cumulocity.FindMeasurement;
+using com.apama.cumulocity.FindMeasurementResponse;
+using com.apama.cumulocity.FindMeasurementResponseAck;
+
+using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.FindAlarm;
+using com.apama.cumulocity.FindAlarmResponse;
+using com.apama.cumulocity.FindAlarmResponseAck;
+
+using com.apama.cumulocity.Event;
+using com.apama.cumulocity.FindEvent;
+using com.apama.cumulocity.FindEventResponse;
+using com.apama.cumulocity.FindEventResponseAck;
+
+using com.apama.cumulocity.Operation;
+using com.apama.cumulocity.FindOperation;
+using com.apama.cumulocity.FindOperationResponse;
+using com.apama.cumulocity.FindOperationResponseAck;
+
+using com.apama.cumulocity.ObjectCommitted;
+using com.apama.cumulocity.ObjectCommitFailed;
+
+/** Miscellaneous utilities */
+using com.apama.cumulocity.Util;
+using com.apama.util.AnyExtractor;
+
+monitor GenerationPredictor {
+	/** Initialize the application */
+	action onload() {
+		// send MeasurementFragment("", "weatherData", devices.deviceId, 
+		//		                         time,
+		//		                         "weatherForecast", "sunshine_duration", 
+		//		                         <float> sunshine_duration[i], r.payload.getString("daily_units.sunshine_duration"), 
+		//		                         new dictionary<string, any>) to MeasurementFragment.SEND_CHANNEL;
+		on all MeasurementFragment(type="weatherData", valueFragment="weatherForecast", valueSeries="sunshine_duration") as mf {
+			float percentage := 10.;
+			if mf.value > 0 {
+				percentage := float.max(10., 60.-(2.490*mf.value)/2000.);
+			}
+			log "Predict we should charge to "+percentage.toString();
+			
+		}
+	}
+}
