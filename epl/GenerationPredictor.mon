@@ -29,6 +29,9 @@ using com.apama.cumulocity.FindOperationResponseAck;
 using com.apama.cumulocity.ObjectCommitted;
 using com.apama.cumulocity.ObjectCommitFailed;
 using com.apama.cumulocity.SendEmail;
+using com.apama.cumulocity.FindTenantOptions;
+using com.apama.cumulocity.FindTenantOptionsResponse;
+using com.apama.cumulocity.TenantOption;
 
 /** Miscellaneous utilities */
 using com.apama.cumulocity.Util;
