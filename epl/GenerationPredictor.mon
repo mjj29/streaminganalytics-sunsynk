@@ -43,11 +43,11 @@ monitor GenerationPredictor {
 		//		                         new dictionary<string, any>) to MeasurementFragment.SEND_CHANNEL;
 		on all MeasurementFragment(type="weatherData", valueFragment="weatherForecast", valueSeries="sunshine_duration") as mf {
 			float percentage := 10.;
-			if mf.value > 0 {
+			if mf.value > 0. {
 				percentage := float.max(10., 60.-(2.490*mf.value)/2000.);
 			}
 			log "Predict we should charge to "+percentage.toString();
-			
+
 		}
 	}
 }
