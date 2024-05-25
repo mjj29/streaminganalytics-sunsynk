@@ -51,7 +51,6 @@ monitor GenerationPredictor {
 	SunsynkConfiguration config;
 	action onload() {
 		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["notificationEmail"])): config {
-			monitor.subscribe(MeasurementFragment.SUBSCRIBE_CHANNEL);
 			on all MeasurementFragment(type="weatherData", valueFragment="weatherForecast", valueSeries="sunshine_duration") as mf {
 				float percentage := 10.;
 				if mf.value > 0. {
