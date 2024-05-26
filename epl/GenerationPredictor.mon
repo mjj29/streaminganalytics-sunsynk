@@ -1,5 +1,33 @@
 /** Basic event definitions */
+using com.apama.cumulocity.ManagedObject;
+using com.apama.cumulocity.FindManagedObject;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementValue;
 using com.apama.cumulocity.MeasurementFragment;
+using com.apama.cumulocity.FindMeasurement;
+using com.apama.cumulocity.FindMeasurementResponse;
+using com.apama.cumulocity.FindMeasurementResponseAck;
+
+using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.FindAlarm;
+using com.apama.cumulocity.FindAlarmResponse;
+using com.apama.cumulocity.FindAlarmResponseAck;
+
+using com.apama.cumulocity.Event;
+using com.apama.cumulocity.FindEvent;
+using com.apama.cumulocity.FindEventResponse;
+using com.apama.cumulocity.FindEventResponseAck;
+
+using com.apama.cumulocity.Operation;
+using com.apama.cumulocity.FindOperation;
+using com.apama.cumulocity.FindOperationResponse;
+using com.apama.cumulocity.FindOperationResponseAck;
+
+using com.apama.cumulocity.ObjectCommitted;
+using com.apama.cumulocity.ObjectCommitFailed;
 using com.apama.cumulocity.SendEmail;
 using com.apama.cumulocity.FindTenantOptions;
 using com.apama.cumulocity.FindTenantOptionsResponse;
@@ -50,8 +78,7 @@ monitor GenerationPredictor {
 	/** Initialize the application */
 	SunsynkConfiguration config;
 	action onload() {
-		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["notificationEmail"])): config {
-			monitor.subscribe(MeasurementFragment.SUBSCRIBE_CHANNEL);
+		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["username", "password", "inverterId", "notificationEmail"])): config {
 			on all MeasurementFragment(type="weatherData", valueFragment="weatherForecast", valueSeries="sunshine_duration") as mf {
 				float percentage := 10.;
 				if mf.value > 0. {
