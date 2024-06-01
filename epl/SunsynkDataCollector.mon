@@ -263,8 +263,9 @@ event SunsynkDataCollector {
 		"sellTime5": "18:18"
 	}
 	*/
-	action setSettings(dictionary<string, string> newSettings)
+	action setSettings(any newSettings)
 	{
+		log "Setting configuration: "+JSONPlugin.toJSON(newSettings);
 		SunsynkRequest.create("POST", "/api/v1/common/setting/"+inverter+"/set", newSettings, token).execute(_);
 	}
 	action getMessages(action<Response> handler)
@@ -368,7 +369,7 @@ monitor SunsynkDataCollectorMonitor
 							collector.setOneOffChargePeriod(ae.getString("PowerUp.parameters.date"), ae.getString("PowerUp.parameters.start"), ae.getString("PowerUp.parameters.end"));
 						}
 						else if op.params.hasKey("SetConfiguration") {
-							collector.setSettings(<dictionary<string, string>> ae.getAny("PowerUp.parameters.settings"));
+							collector.setSettings(ae.getAny("SetConfiguration.parameters.settings"));
 						}
 						else {
 							log "Unknown operation "+op.toString() at ERROR;
