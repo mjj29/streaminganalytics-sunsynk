@@ -1,0 +1,41 @@
+/** Basic event definitions */
+using com.apama.cumulocity.ManagedObject;
+using com.apama.cumulocity.FindManagedObject;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementValue;
+using com.apama.cumulocity.MeasurementFragment;
+using com.apama.cumulocity.FindMeasurement;
+using com.apama.cumulocity.FindMeasurementResponse;
+using com.apama.cumulocity.FindMeasurementResponseAck;
+
+using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.FindAlarm;
+using com.apama.cumulocity.FindAlarmResponse;
+using com.apama.cumulocity.FindAlarmResponseAck;
+
+using com.apama.cumulocity.Event;
+using com.apama.cumulocity.FindEvent;
+using com.apama.cumulocity.FindEventResponse;
+using com.apama.cumulocity.FindEventResponseAck;
+
+using com.apama.cumulocity.Operation;
+using com.apama.cumulocity.FindOperation;
+using com.apama.cumulocity.FindOperationResponse;
+using com.apama.cumulocity.FindOperationResponseAck;
+
+using com.apama.cumulocity.ObjectCommitted;
+using com.apama.cumulocity.ObjectCommitFailed;
+
+/** Miscellaneous utilities */
+using com.apama.cumulocity.Util;
+using com.apama.util.AnyExtractor;
+
+monitor MySampleMonitor {
+	/** Initialize the application */
+	action onload() {
+		// Application starts here
+	}
+}
