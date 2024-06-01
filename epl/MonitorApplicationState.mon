@@ -3,6 +3,11 @@ using com.apama.cumulocity.GenericRequest;
 using com.apama.cumulocity.GenericResponse;
 using com.apama.cumulocity.GenericResponseComplete;
 using com.apama.cumulocity.Util;
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.FindMeasurement;
+using com.apama.cumulocity.FindMeasurementResponse;
+using com.apama.cumulocity.FindMeasurementResponseAck;
+using com.apama.cumulocity.Alarm;
 
 using com.apama.correlator.Component;
 using com.apama.functional.Fn;
@@ -13,9 +18,34 @@ using com.softwareag.connectivity.httpclient.HttpTransport;
 using com.softwareag.connectivity.httpclient.Request;
 using com.softwareag.connectivity.httpclient.Response;
 
+event SunsynkDevices {
+	constant string CREATED_CHANNEL := "SunsynkDevices.created";
+	static action find(string type) returns integer
+	{
+		SunsynkDevices devices := new SunsynkDevices;
+		devices.id := integer.getUnique();
+		monitor.subscribe(FindManagedObjectResponse.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		Fn.getAllEvents("com.apama.cumulocity.FindManagedObjectResponse", {"reqId":<any>reqId}, "com.apama.cumulocity.FindManagedObjectResponseAck", {"reqId":<any>reqId}, devices.setDevices);
+		send FindManagedObject(reqId, "", {"type":type}) to FindManagedObject.SEND_CHANNEL;
+		return devices.id;
+	}
+	action setDevices(sequence<FindManagedObjectResponse> responses) {
+		FindManagedObjectResponse resp;
+		for resp in responses {
+			log "Found Managed Object "+resp.managedObject.toString();
+			devices.append(resp.managedObject);
+		}
+		send self to CREATED_CHANNEL;
+	}
+	integer id;
+	sequence<ManagedObject> devices;
+}
+
 monitor MonitorApplicationState {
 	action onload() {
 		monitor.subscribe(GenericResponse.SUBSCRIBE_CHANNEL);
+		monitor.subscribe(FindMeasurementResponse.SUBSCRIBE_CHANNEL);
 		// check that the expected set of applications are active in EPLApps and are live in the correlator
 		// check the the expected set of devices are producing measurements
 		any sunsynkMonitorsAndDevices := {
@@ -49,7 +79,7 @@ monitor MonitorApplicationState {
 			"WeatherDataCollector": {
 				"weatherData": {
 					"weatherForecast": {
-						"sunshineDuration": 60*24,
+						"sunshine_duration": 60*24,
 						"cloud_cover_high": 60*24,
 						"cloud_cover_low": 60*24,
 						"cloud_cover_mid": 60*24
@@ -88,15 +118,40 @@ monitor MonitorApplicationState {
 					if eplfile.size() > 0 {
 						log "Found EPL App with active state "+eplfile[0].getEntry("state").valueToString();
 						// check that it's active
-						assertThat(eplfile[0].getEntry("state"), "active", monitorName, "EPL App is not active");
+						assertThat(eplfile[0].getEntry("state")=<any>"active", monitorName, "EPL App is not active");
 						// check that a monitor instance with that name exists
 						sequence<any> m := <sequence<any>>Fn.filter(monitors, Fn.partial(Fn.fieldEqual, ["name", monitorName]));
-						assertThat(m.size(), 1, monitorName, "EPL Monitor does not exist for app");
+						assertThat(m.size()>0, monitorName, "EPL Monitor does not exist for app");
 						// for each device in that entry
 						any deviceType;
 						for deviceType in monitorDevices.getKeys() {
 							// check that a device with that type exists
-							
+							on SunsynkDevices(id=SunsynkDevices.find(<string>deviceType)) as devices {
+								assertThat(devices.devices.size()>0, deviceType, "Device not found for type");
+								any deviceFragment;
+								for deviceFragment in monitorDevices.getEntry(deviceType).getKeys() {
+									any deviceSeries;
+									for deviceSeries in monitorDevices.getEntry(deviceType).getEntry(deviceFragment).getKeys() {
+										integer timeoutMinutes := <integer> monitorDevices.getEntry(deviceType).getEntry(deviceFragment).getEntry(deviceSeries);
+										log "Checking for "+deviceFragment.valueToString()+"/"+deviceSeries.valueToString()+" within "+timeoutMinutes.toString()+" minutes in device "+devices.devices[0].id;
+										integer id := Util.generateReqId();
+										send FindMeasurement(id, {
+											"source":devices.devices[0].id,
+											"valueFragmentType":<string>deviceFragment,
+											"valueFragmentSeries":<string>deviceSeries,
+											"revert":"true",
+											"pageSize":"1",
+											"currentPage":"1"										
+										}) to FindMeasurement.SEND_CHANNEL;
+										on FindMeasurementResponse(reqId=id) as resp and not FindMeasurementResponseAck(reqId=id) {
+											assertThat(resp.measurement.time > currentTime-timeoutMinutes.toFloat()*60., resp.measurement, "Latest measurement is too old");
+										}
+										on FindMeasurementResponseAck(reqId=id) as resp and not FindMeasurementResponse(reqId=id) {
+											assertThat(false, deviceFragment.valueToString()+"/"+deviceSeries.valueToString(), "Could not find a measurement for fragment/series");
+										}
+									}
+								}
+							}
 							// for each fragment/series, check that the most recent measurement is at most duration old	
 						}
 					}
@@ -104,12 +159,12 @@ monitor MonitorApplicationState {
 			}
 		}
 		on GenericResponseComplete(reqId=id) as r and not GenericResponse(reqId=id) {
-			assertThat(false, true, r, "Failed to get EPL files");
+			assertThat(false, r, "Failed to get EPL files");
 		}
 	}
-	action assertThat(any value, any reference, any object, string message)
+	action assertThat(boolean comparison, any object, string message)
 	{
-		if value != reference {
+		if not comparison {
 			log message+": "+object.valueToString() at ERROR;
 		}
 	}
