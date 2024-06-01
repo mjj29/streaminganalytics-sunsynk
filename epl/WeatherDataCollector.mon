@@ -108,7 +108,7 @@ monitor WeatherDataCollectorMonitor
 	action onload()
 	{
 		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
-		on SunsynkDevice(id=SunsynkDevices.find("sunsynkInvertor")): sunsynkDevices {
+		on SunsynkDevices(id=SunsynkDevices.find("sunsynkInvertor")): sunsynkDevices {
 			string loc := sunsynkDevices.devices[0].position["lat"]+","+sunsynkDevices.devices[0].position["lng"];
 			on SunsynkDevices(id=SunsynkDevices.create("weatherData", "weatherData"+loc)): devices {		
 				WeatherDataCollector collector := WeatherDataCollector.create(loc, sunsynkDevices.devices[0].params["timezone"]);
