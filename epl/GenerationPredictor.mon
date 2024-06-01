@@ -4,30 +4,11 @@ using com.apama.cumulocity.FindManagedObject;
 using com.apama.cumulocity.FindManagedObjectResponse;
 using com.apama.cumulocity.FindManagedObjectResponseAck;
 
-using com.apama.cumulocity.Measurement;
-using com.apama.cumulocity.MeasurementValue;
 using com.apama.cumulocity.MeasurementFragment;
-using com.apama.cumulocity.FindMeasurement;
-using com.apama.cumulocity.FindMeasurementResponse;
-using com.apama.cumulocity.FindMeasurementResponseAck;
 
-using com.apama.cumulocity.Alarm;
-using com.apama.cumulocity.FindAlarm;
-using com.apama.cumulocity.FindAlarmResponse;
-using com.apama.cumulocity.FindAlarmResponseAck;
-
-using com.apama.cumulocity.Event;
-using com.apama.cumulocity.FindEvent;
-using com.apama.cumulocity.FindEventResponse;
-using com.apama.cumulocity.FindEventResponseAck;
 
 using com.apama.cumulocity.Operation;
-using com.apama.cumulocity.FindOperation;
-using com.apama.cumulocity.FindOperationResponse;
-using com.apama.cumulocity.FindOperationResponseAck;
 
-using com.apama.cumulocity.ObjectCommitted;
-using com.apama.cumulocity.ObjectCommitFailed;
 using com.apama.cumulocity.SendEmail;
 using com.apama.cumulocity.FindTenantOptions;
 using com.apama.cumulocity.FindTenantOptionsResponse;
@@ -36,6 +17,31 @@ using com.apama.cumulocity.TenantOption;
 /** Miscellaneous utilities */
 using com.apama.cumulocity.Util;
 using com.apama.util.AnyExtractor;
+using com.apama.functional.Fn;
+
+event SunsynkDevices {
+	constant string CREATED_CHANNEL := "SunsynkDevices.created";
+	static action find(string type) returns integer
+	{
+		SunsynkDevices devices := new SunsynkDevices;
+		devices.id := integer.getUnique();
+		monitor.subscribe(FindManagedObjectResponse.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		Fn.getAllEvents("com.apama.cumulocity.FindManagedObjectResponse", {"reqId":<any>reqId}, "com.apama.cumulocity.FindManagedObjectResponseAck", {"reqId":<any>reqId}, devices.setDevices);
+		send FindManagedObject(reqId, "", {"type":type}) to FindManagedObject.SEND_CHANNEL;
+		return devices.id;
+	}
+	action setDevices(sequence<FindManagedObjectResponse> responses) {
+		FindManagedObjectResponse resp;
+		for resp in responses {
+			log "Found Managed Object "+resp.managedObject.toString();
+			devices.append(resp.managedObject);
+		}
+		send self to CREATED_CHANNEL;
+	}
+	integer id;
+	sequence<ManagedObject> devices;
+}
 
 event SunsynkConfiguration {
 	constant string CREATED_CHANNEL := "SunsynkConfiguration.created";
@@ -77,19 +83,38 @@ event SunsynkConfiguration {
 monitor GenerationPredictor {
 	/** Initialize the application */
 	SunsynkConfiguration config;
+	SunsynkDevices devices;
 	action onload() {
-		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["username", "password", "inverterId", "notificationEmail"])): config {
-			on all MeasurementFragment(type="weatherData", valueFragment="weatherForecast", valueSeries="sunshine_duration") as mf {
-				float percentage := 10.;
-				if mf.value > 0. {
-					percentage := float.max(10., 60.-(2.490*mf.value)/2000.);
+		monitor.subscribe(SunsynkConfiguration.CREATED_CHANNEL);
+		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
+		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["notificationEmail"])): config {
+			on SunsynkDevices(id=SunsynkDevices.find("sunsynkInvertor")): devices {
+				float chargeDivisor := 240.;
+				float chargeFactor := (<float>devices.devices[0].params["pvMaxPower"])/(<float>devices.devices[0].params["maxBatteryCapacity"]*chargeDivisor);
+				float chargeOffset := 100.;
+				log "maxPV = "+devices.devices[0].params["pvMaxPower"].valueToString()+" batteryCapacity="+ devices.devices[0].params["maxBatteryCapacity"].valueToString()+" chargeDivisor="+chargeDivisor.toString()+" chargeFactor = "+chargeFactor.toString()+" chargeOffset = "+chargeOffset.toString();
+				on all MeasurementFragment(type="weatherData", valueFragment="weatherForecast", valueSeries="sunshine_duration") as mf {
+					float percentage := 10.;
+					if mf.value > 0. {
+						percentage := float.max(10., chargeOffset-(chargeFactor*mf.value));
+					}
+					log "Predict we should charge to "+percentage.toString();
+					send SendEmail("Setting charge percentange to "+percentage.toString(), 
+					"Setting charge percentage to "+percentage.toString(),
+					"", [config.options["notificationEmail"]], 
+					new sequence<string>, "",
+					new dictionary<string, string>) to SendEmail.SEND_CHANNEL;
+					send Operation("", devices.devices[0].id, Operation.STATUS_PENDING, {
+						"SetConfiguration":<any>{
+							"parameters": {
+								"settings":{
+									"time1On": "1",
+									"cap1":percentage
+								}
+							}
+						}
+					}) to Operation.SEND_CHANNEL;
 				}
-				log "Predict we should charge to "+percentage.toString();
-				send SendEmail("Setting charge percentange to "+percentage.toString(), 
-				"Setting charge percentage to "+percentage.toString(),
-				"", [config.options["notificationEmail"]], 
-				new sequence<string>, "",
-				new dictionary<string, string>) to SendEmail.SEND_CHANNEL;
 			}
 		}
 	}
