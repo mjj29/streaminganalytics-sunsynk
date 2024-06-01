@@ -109,6 +109,7 @@ event SunsynkDevices {
 			if resp.managedObject.name = name {
 				log "Found Managed Object "+resp.managedObject.toString();
 				deviceId := resp.managedObject.id;
+				device := resp.managedObject;
 				send self to CREATED_CHANNEL;
 				return;
 			}
@@ -127,6 +128,7 @@ event SunsynkDevices {
 	}
 	integer id;
 	string deviceId;
+	ManagedObject device;
 }
 
 event SunsynkDataCollector {
@@ -387,11 +389,17 @@ monitor SunsynkDataCollectorMonitor
 		long := r.payload.getFloat("data.lon");
 		log "Max PV power: "+pvMaxPower.toString()+" kW";
 		log "Timezone: "+timezone+" location: "+lat.toString()+","+long.toString();
+		devices.device.params["pvMaxPower"] := pvMaxPower;
+		devices.device.params["timezone"] := timezone;
+		devices.device.position := {"lat":lat, "lng":long};
+		send devices.device to ManagedObject.SEND_CHANNEL;
 	}
 	action parseInverterConfig(Response r)
 	{
 		inverterMaxRate := r.payload.getInteger("data.ratePower");
 		log "Max inverter rated power: "+inverterMaxRate.toString()+" W";
+		devices.device.params["inverterMaxRate"] := inverterMaxRate;
+		send devices.device to ManagedObject.SEND_CHANNEL;
 	}
 	action parseBatteryConfig(Response r)
 	{
@@ -399,6 +407,8 @@ monitor SunsynkDataCollectorMonitor
 		float voltage := r.payload.getString("data.voltage").toFloat();
 		maxBatteryCapacity := capacityAmpHours * voltage / 1000.;
 		log "Max battery capacity: "+maxBatteryCapacity.toString()+" kWh";
+		devices.device.params["maxBatteryCapacity"] := maxBatteryCapacity;
+		send devices.device to ManagedObject.SEND_CHANNEL;
 	}
 	action flowToMeasurement(Response r)
 	{
