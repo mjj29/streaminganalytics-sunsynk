@@ -9,6 +9,12 @@ using com.apama.cumulocity.FindMeasurementResponse;
 using com.apama.cumulocity.FindMeasurementResponseAck;
 using com.apama.cumulocity.Alarm;
 
+using com.apama.cumulocity.ManagedObject;
+using com.apama.cumulocity.FindManagedObject;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+
+
 using com.apama.correlator.Component;
 using com.apama.functional.Fn;
 using com.apama.util.AnyExtractor;
