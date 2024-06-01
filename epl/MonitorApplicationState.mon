@@ -1,0 +1,116 @@
+
+using com.apama.cumulocity.GenericRequest;
+using com.apama.cumulocity.GenericResponse;
+using com.apama.cumulocity.GenericResponseComplete;
+using com.apama.cumulocity.Util;
+
+using com.apama.correlator.Component;
+using com.apama.functional.Fn;
+using com.apama.util.AnyExtractor;
+using com.apama.json.JSONPlugin;
+
+using com.softwareag.connectivity.httpclient.HttpTransport;
+using com.softwareag.connectivity.httpclient.Request;
+using com.softwareag.connectivity.httpclient.Response;
+
+monitor MonitorApplicationState {
+	action onload() {
+		monitor.subscribe(GenericResponse.SUBSCRIBE_CHANNEL);
+		// check that the expected set of applications are active in EPLApps and are live in the correlator
+		// check the the expected set of devices are producing measurements
+		any sunsynkMonitorsAndDevices := {
+			"SunsynkDataCollector": {
+				"sunsynkInvertor": {
+					"sunsynkBattery": {				
+						"batteryPower": 15,
+						"batteryCharge": 15
+					},
+					"sunsynkGrid": {
+						"gridPower": 15,
+						"gridDailyUsage": 15
+					},
+					"sunsynkHome": {
+						"loadPower": 15,
+						"loadDailyUsage": 15
+					},
+					"sunsynkPV": {
+						"pvPower": 15,
+						"pvDailyGen": 15
+					}
+				}
+			},
+			"OctopusPriceCollector": {
+				"octopusPrices": new dictionary<string, integer>
+			},
+			"AgileCharging": new dictionary<string, dictionary<string, integer>>,
+			"DerivedPricing": {
+				"derivedPricing": new dictionary<string, integer>
+			},
+			"WeatherDataCollector": {
+				"weatherData": {
+					"weatherForecast": {
+						"sunshineDuration": 60*24,
+						"cloud_cover_high": 60*24,
+						"cloud_cover_low": 60*24,
+						"cloud_cover_mid": 60*24
+					}
+				}
+			},
+			"GenerationPredictor": new dictionary<string, dictionary<string, integer>>
+		};
+
+		checkMonitorStatus(sunsynkMonitorsAndDevices);
+		on all wait(60.*60.) {
+			checkMonitorStatus(sunsynkMonitorsAndDevices);
+		}
+	}
+	action checkMonitorStatus(any sunsynkMonitorsAndDevices)
+	{		
+		integer id := Util.generateReqId();
+		send Fn.setFields(new GenericRequest, {"path": "/service/cep/eplfiles", "reqId":id, "method":"GET"}) to GenericRequest.SEND_CHANNEL;
+		on GenericResponse(reqId=id) as r and not GenericResponseComplete(reqId=id) {
+			sequence<any> eplfiles := AnyExtractor(r.getBody()).getSequence("eplfiles");
+			log "Got eplfiles: "+JSONPlugin.toJSON(eplfiles);
+			HttpTransport transport := HttpTransport.getOrCreate(Component.getHostname(), Component.getComponentPort());
+			Request req := transport.createGETRequest("/correlator/info");
+			req.id := integer.getUnique();
+			send req to req.channel;
+			on Response(id=req.id) as resp {
+				sequence<any> monitors := resp.payload.getSequence("monitors");
+				log "Got monitors: "+JSONPlugin.toJSON(monitors);
+				// for each entry in sunsynkMonitorsAndDevices
+				any monitorName;
+				for monitorName in sunsynkMonitorsAndDevices.getKeys() {
+					log "Checking for EPL App "+monitorName.valueToString();
+					any monitorDevices := sunsynkMonitorsAndDevices.getEntry(monitorName);
+					// if the epl app with that name exists
+					sequence<any> eplfile := <sequence<any>>Fn.filter(eplfiles, Fn.partial(Fn.fieldEqual, ["name", monitorName]));
+					if eplfile.size() > 0 {
+						log "Found EPL App with active state "+eplfile[0].getEntry("state").valueToString();
+						// check that it's active
+						assertThat(eplfile[0].getEntry("state"), "active", monitorName, "EPL App is not active");
+						// check that a monitor instance with that name exists
+						sequence<any> m := <sequence<any>>Fn.filter(monitors, Fn.partial(Fn.fieldEqual, ["name", monitorName]));
+						assertThat(m.size(), 1, monitorName, "EPL Monitor does not exist for app");
+						// for each device in that entry
+						any deviceType;
+						for deviceType in monitorDevices.getKeys() {
+							// check that a device with that type exists
+							
+							// for each fragment/series, check that the most recent measurement is at most duration old	
+						}
+					}
+				}
+			}
+		}
+		on GenericResponseComplete(reqId=id) as r and not GenericResponse(reqId=id) {
+			assertThat(false, true, r, "Failed to get EPL files");
+		}
+	}
+	action assertThat(any value, any reference, any object, string message)
+	{
+		if value != reference {
+			log message+": "+object.valueToString() at ERROR;
+		}
+	}
+}
