@@ -77,7 +77,7 @@ monitor SendOperationMonitor {
 	/** Initialize the application */
 	action onload() {
 		on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk2208309020", ["PowerUp","SetConfiguration"])): devices {
-			send Operation("", devices.deviceId, "PENDING", {"description":"Powerup on 2024-05-14 from 12:00 to 14:00", "PowerUp":<any>{"name":"Set Powerup", "parameters":{"date":"2024-05-14", "start":"12:00", "end":"14:00"}}}) to Operation.SEND_CHANNEL;
+			send Operation("", devices.deviceId, "PENDING", {"description":"Powerup on 2024-06-06 from 12:00 to 14:00", "PowerUp":<any>{"name":"Set Powerup", "parameters":{"date":"2024-06-06", "start":"12:00", "end":"14:00"}}}) to Operation.SEND_CHANNEL;
 		}
 	}
 }
