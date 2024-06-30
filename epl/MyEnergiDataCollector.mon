@@ -1,0 +1,360 @@
+using com.softwareag.connectivity.httpclient.HttpTransport;
+using com.softwareag.connectivity.httpclient.HttpOptions;
+using com.softwareag.connectivity.httpclient.Request;
+using com.softwareag.connectivity.httpclient.Response;
+using com.apama.json.JSONPlugin;
+using com.apama.correlator.timeformat.TimeFormat;
+using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.Measurement;
+using com.apama.cumulocity.MeasurementValue;
+using com.apama.cumulocity.FindTenantOptions;
+using com.apama.cumulocity.FindTenantOptionsResponse;
+using com.apama.cumulocity.TenantOption;
+using com.apama.cumulocity.FindManagedObject;
+using com.apama.cumulocity.FindManagedObjectResponse;
+using com.apama.cumulocity.FindManagedObjectResponseAck;
+using com.apama.cumulocity.ManagedObject;
+using com.apama.cumulocity.ObjectCommitted;
+using com.apama.cumulocity.ObjectCommitFailed;
+using com.apama.cumulocity.Operation;
+using com.apama.cumulocity.Util;
+using com.apama.cumulocity.SendEmail;
+using com.apama.util.AnyExtractor;
+using com.apama.functional.Functional;
+using com.apama.functional.Fn;
+
+event MyEnergiRequest {
+	constant string URLBASE := "s18.myenergi.net";
+	static action create(string method, string url, any data, string hubId, string key) returns MyEnergiRequest
+	{
+		MyEnergiRequest request := new MyEnergiRequest;
+		request.headers := {
+				"content-type": "application/json",
+				"accept": "application/json"
+			};
+		request.method := method;
+		request.url := url;
+		request.data := data;
+		request.user := hubId;
+		request.password := key;
+		return request;
+	}
+ 	action execute(action<Response> handler)
+ 	{
+ 		HttpTransport transport := HttpTransport.getOrCreateWithConfigurations(URLBASE, 443, {HttpTransport.CONFIG_TLS: "true", HttpTransport.CONFIG_USERNAME:user, HttpTransport.CONFIG_PASSWORD:password, HttpTransport.CONFIG_AUTH_TYPE:"HTTP_DIGEST"});
+ 		HttpOptions options := new HttpOptions;
+ 		options.headers := headers;
+ 		Request req := transport.createRequest(method, url, data, options);
+ 		req.execute(handler);
+ 	}
+	string method;
+	string url;
+	any data;
+	string user;
+	string password;
+	dictionary<string, string> headers;
+}
+
+event SunsynkConfiguration {
+	constant string CREATED_CHANNEL := "SunsynkConfiguration.created";
+	static action create(string category, sequence<string> options) returns integer
+	{
+		SunsynkConfiguration config := new SunsynkConfiguration;
+		config.id := integer.getUnique();
+		monitor.subscribe(FindTenantOptionsResponse.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		on FindTenantOptionsResponse(reqId=reqId) as resp {
+			monitor.unsubscribe(FindTenantOptionsResponse.SUBSCRIBE_CHANNEL);
+			TenantOption t;
+			for t in resp.options {
+				string k;
+				for k in options {
+					if t.key = k {
+						config.options[k] := t.value;
+					}
+				}
+			}
+			string k;
+			for k in options {
+				if not config.options.hasKey(k) {
+					log "Error, missing configuration, define the following tenant options in the "+category+" category: "+options.toString() at ERROR;
+					return;
+				}
+			}
+			
+			send config to CREATED_CHANNEL;
+		}
+		send FindTenantOptions(reqId, false, category, "", new dictionary<string, string>) to FindTenantOptions.SEND_CHANNEL;
+		return config.id;
+	}
+	integer id;
+	dictionary<string, string> options;
+}
+
+event SunsynkDevices {
+	constant string CREATED_CHANNEL := "SunsynkDevices.created";
+	static action create(string type, string name, sequence<string> operations) returns integer
+	{
+		SunsynkDevices devices := new SunsynkDevices;
+		devices.id := integer.getUnique();
+		monitor.subscribe(FindManagedObjectResponse.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		Fn.getAllEvents("com.apama.cumulocity.FindManagedObjectResponse", {"reqId":<any>reqId}, "com.apama.cumulocity.FindManagedObjectResponseAck", {"reqId":<any>reqId}, Fn.partial(devices.checkForManagedObject, [type, name, operations]));
+		send FindManagedObject(reqId, "", {"type":type}) to FindManagedObject.SEND_CHANNEL;
+		return devices.id;
+	}
+	action checkForManagedObject(string type, string name, sequence<string> operations, sequence<FindManagedObjectResponse> responses) {
+		FindManagedObjectResponse resp;
+		for resp in responses {
+			if resp.managedObject.name = name {
+				log "Found Managed Object "+resp.managedObject.toString();
+				device := resp.managedObject;
+				deviceId := resp.managedObject.id;
+				send self to CREATED_CHANNEL;
+				return;
+			}
+		}
+		monitor.subscribe(ManagedObject.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		on ObjectCommitted(reqId=reqId) as oc and not ObjectCommitFailed(reqId=reqId) {
+			deviceId := oc.id;
+			device.id := oc.id;
+			log "Created managed Object "+oc.id;
+			send self to CREATED_CHANNEL;
+		}
+		on ObjectCommitFailed(reqId=reqId) as ocf and not ObjectCommitted(reqId=reqId) {
+			log "Failure creating managed object: "+ocf.body.valueToString() at ERROR;
+		}
+		device := <ManagedObject>Fn.setFields(new ManagedObject, {"type":type, "name":name, "params": {"c8y_IsDevice":<any>new dictionary<any, any>, "com_cumulocity_model_Agent":new dictionary<any, any>, "c8y_supportedOperations": operations}});
+		send device.withChannelResponse(reqId, new dictionary<string, string>) to ManagedObject.SEND_CHANNEL;
+	}
+	integer id;
+	string deviceId;
+	ManagedObject device;
+}
+
+event MyEnergiDataCollector {
+	constant string CREATED_CHANNEL := "MyEnergiDataCollector.created";
+	constant integer CHARGE_MODE_FAST := 1;
+	constant integer CHARGE_MODE_ECO := 2;
+	constant integer CHARGE_MODE_ECOPLUS := 3;
+	constant integer CHARGE_MODE_STOP := 4;
+	constant integer SCHEDULE_MONDAY := 1000000;
+	constant integer SCHEDULE_TUESDAY := 100000;
+	constant integer SCHEDULE_WEDSDAY := 10000;
+	constant integer SCHEDULE_THURSDAY := 1000;
+	constant integer SCHEDULE_FRIDAY := 100;
+	constant integer SCHEDULE_SATURDAY := 10;
+	constant integer SCHEDULE_SUNDAY := 1;
+	static action create(string hubId, string apiKey) returns MyEnergiDataCollector
+	{
+		MyEnergiDataCollector collector := new MyEnergiDataCollector;
+		collector.hubId := hubId;
+		collector.apiKey := apiKey;
+		return collector;
+	}
+	action getStatus(string type, action<Response> handler)
+	{
+		MyEnergiRequest req := MyEnergiRequest.create("GET", "/cgi-jstatus-"+type, new any, hubId, apiKey);
+		req.execute(handler);
+	}
+	action setMinimumGreenLevel(integer zappiSerial, integer percentage)
+	{
+		MyEnergiRequest.create("GET", "/cgi-set-min-green-Z"+zappiSerial+"-"+percentage.toString(), new any, hubId, apiKey).execute(_);
+	}
+	action setChargeMode(integer zappiSerial, integer chargeMode)
+	{
+		MyEnergiRequest.create("GET", "/cgi-zappi-mode-Z"+zappiSerial+"-"+chargeMode+"-0-0-0000", new any, hubId, apiKey).execute(_);
+	}
+	action boostCharge(integer zappiSerial, integer kWh)
+	{
+		MyEnergiRequest.create("GET", "/cgi-zappi-mode-Z"+zappiSerial+"-0-10-"+kWh+"-0000", new any, hubId, apiKey).execute(_);
+	}
+	action smartBoostCharge(integer zappiSerial, integer kWh, integer completeTime)
+	{
+		MyEnergiRequest.create("GET", "/cgi-zappi-mode-Z"+zappiSerial+"-0-11-"+kWh+"-"+completeTime, new any, hubId, apiKey).execute(_);
+	}
+	action pad(integer n, integer i) returns string
+	{
+		string rv := i.toString();
+		integer padding := n-rv.length();
+		while padding > 0 {
+			padding := padding - 1;
+			rv := "0" + rv;
+		}
+		return rv;
+	}
+	action setBoostTime(integer zappiSerial, integer slot, integer startHour, integer startMinute, integer durationHour, integer durationMinute, integer days)
+	{
+		string startTime := pad(2, startHour) + pad(2, startMinute);
+		string durationTime := durationHour + pad(2, durationMinute);
+		string daySpec := pad(8, days);
+		MyEnergiRequest.create("GET", "/cgi-boost-time-Z"+zappiSerial+"-"+slot+"-"+startTime+"-"+durationTime+"-"+daySpec, new any, hubId, apiKey).execute(_);
+	}
+	action setOneOffChargePeriod(integer zappiSerial, string date, string start, string end)
+	{
+		float startDay := TimeFormat.parseTimeWithTimeZone("yyyy-MM-dd", date, "Europe/London");
+		float todayDay := TimeFormat.parseTimeWithTimeZone("yyyy-MM-dd", TimeFormat.formatWithTimeZone(currentTime, "yyyy-MM-dd", "Europe/London"), "Europe/London");
+		string emailMessage := "";
+		sequence<string> startTimeSeq := ":".split(start);
+		sequence<string> endTimeSeq := ":".split(end);
+		integer startTimeSecs := TimeFormat.parseTime("HH:mm", start).floor();
+		integer endTimeSecs := TimeFormat.parseTime("HH:mm", end).floor();
+		integer dayCount := 7-TimeFormat.format(startDay, "e").toInteger();
+		integer day := 1;
+		while dayCount > 0 {
+			day := day * 10;
+			dayCount := dayCount - 1;
+		}
+		if startDay < todayDay {
+			log "setOneOffChargePeriod asked for a day in the past: "+date at ERROR;
+		} else if startDay <= currentTime {
+			//sendNotificationEmail("Setting Zappi PowerUp for today at "+start+" until "+end);
+			setBoostTime(zappiSerial, 11, startTimeSeq[0].toInteger(), startTimeSeq[1].toInteger(), (endTimeSecs-startTimeSecs)/3600, (endTimeSecs-startTimeSecs)%3600, day);
+		} else {
+			//sendNotificationEmail("Setting PowerUp for "+date+" at "+start+" until "+end);
+			log "on wait "+(startDay-currentTime).toString();
+			on wait (startDay-currentTime) {
+				//sendNotificationEmail("Enabling PowerUp at "+start+" until "+end);
+				setBoostTime(zappiSerial, 11, startTimeSeq[0].toInteger(), startTimeSeq[1].toInteger(), (endTimeSecs-startTimeSecs)/60, (endTimeSecs-startTimeSecs)%60, day);
+			}
+		}
+		on wait(startDay+(3600.*24.)-currentTime) {
+			//sendNotificationEmail("Disabling PowerUp");
+			setBoostTime(zappiSerial, 11, 0, 0, 0, 0, 0);
+		}
+	}
+	action _(Response r) { log JSONPlugin.toJSON(r); }
+	string hubId;
+	string apiKey;
+}
+
+
+
+monitor MyEnergiDataCollectorMonitor
+{
+	MyEnergiDataCollector collector;
+	SunsynkConfiguration config;
+	SunsynkDevices devices;
+	integer zappiSerial;
+	action onload()
+	{
+		monitor.subscribe(MyEnergiDataCollector.CREATED_CHANNEL);
+		monitor.subscribe(SunsynkConfiguration.CREATED_CHANNEL);
+		monitor.subscribe(SunsynkDevices.CREATED_CHANNEL);
+		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.myenergi", ["hubId", "apiKey"])): config {
+			on SunsynkDevices(id=SunsynkDevices.create("myEnergi", "myEnergi"+config.options["hubId"], ["SetChargeMode", "StopCharging", "BoostNow", "PowerUp"])): devices {
+				collector := MyEnergiDataCollector.create(config.options["hubId"], config.options["apiKey"]);
+				log "Starting myenergi monitoring hubId "+config.options["hubId"];
+				collector.getStatus("Z", parseZappiStatus);
+				on all wait(60.*5.) {
+					collector.getStatus("Z", parseZappiStatus);
+				}
+				on all Operation(source=devices.deviceId, status="PENDING") as op {
+						op.status := "EXECUTING";
+						log op.toString();
+						send op to Operation.SEND_CHANNEL;
+						AnyExtractor ae := AnyExtractor(op.params);
+						if op.params.hasKey("SetChargeMode") {
+							collector.setChargeMode(zappiSerial, ae.getInteger("SetChargeMode.parameters.mode"));
+						}
+						else if op.params.hasKey("StopCharging") {
+							collector.setChargeMode(zappiSerial, MyEnergiDataCollector.CHARGE_MODE_STOP);
+						}
+						else if op.params.hasKey("BoostNow") {
+							collector.setChargeMode(zappiSerial, MyEnergiDataCollector.CHARGE_MODE_FAST);
+						}
+						if op.params.hasKey("PowerUp") {
+							collector.setOneOffChargePeriod(zappiSerial, ae.getString("PowerUp.parameters.date"), ae.getString("PowerUp.parameters.start"), ae.getString("PowerUp.parameters.end"));
+						}
+						else {
+							log "Unknown operation "+op.toString() at ERROR;
+						}
+						op.status := "SUCCESSFUL";
+						log op.toString();
+						send op to Operation.SEND_CHANNEL;
+					}
+			}
+		}
+	}
+	action parseChargingStatus(integer status) returns string
+	{
+		if status = 0 {
+			return "Starting";
+		} if status = 1 {
+			return "Waiting for surplus";
+		} if status = 2 {
+			return "DSR";
+		} if status = 3 {
+			return "Charging";
+		} if status = 4 {
+			return "Boosting";
+		} if status = 5 {
+			return "Charge complete";
+		} return "Unknown status: "+status.toString();
+	}
+	action parseEVStatus(string status) returns string
+	{
+		if status = "A" {
+			return "EV Disconnected";
+		} if status = "B1" {
+			return "EV Connected";
+		} if status = "B2" {
+			return "Waiting for EV";
+		} if status = "C1" {
+			return "Charge Starting";
+		} if status = "C2" {
+			return "Charging";
+		} if status = "F" {
+			return "Fault";
+		} return "Unknown status "+status;
+	}
+	action parseZappiMode(integer mode) returns string
+	{
+		if mode = 0 {
+			return "Fault/Startup";
+		} if mode = 1 {
+			return "Fast";
+		} if mode = 2 {
+			return "Eco";
+		} if mode = 3 {
+			return "Eco+";
+		} if mode = 4 {
+			return "Stopped";
+		} return "Unknown";
+	}
+	action parseZappiStatus(Response r)
+	{
+		//{"zappi":[
+		//{"beingTamperedWith":false,"ectp3":0,"dat":"08-06-2024","sbk":20,"ectt1":"Internal Load","phaseSetting":"AUTO",
+		//"lck":16,"frq":49.94,"sno":15596590,"div":0,"ectt6":"None","newBootloaderAvailable":false,"isVHubEnabled":false,
+		//"zs":0,"productCode":"3560","cmt":254,"pha":1,"fwv":"3560S3.103","che":13.28,"batteryDischargeEnabled":false,
+		//"ectt4":"None","sta":1,"dst":1,"ectt2":"Grid","ectt5":"None","ectt3":"None","deviceClass":"ZAPPI","tim":"10:17:30",
+		//"bsm":0,"sbh":5,"bst":0,"mgl":60,"pst":"A","pri":1,"zmo":3,"newAppAvailable":false,"vol":2380,"bss":0,"tz":0,
+		//"g100LockoutState":"NONE","gen":0,"ectp2":52,"grd":46,"ectp1":0}]}
+		
+		zappiSerial := r.payload.getInteger("zappi.0.sno"); // serial number
+		devices.device.params["chargingStatus"] := parseChargingStatus(r.payload.getInteger("zappi.0.sta"));
+		devices.device.params["evStatus"] := parseEVStatus(r.payload.getString("zappi.0.pst"));
+		devices.device.params["zappiSerial"] := zappiSerial;
+		devices.device.params["zappiMode"] := parseZappiMode(r.payload.getInteger("zappi.0.zmo"));
+		devices.device.params["minimumGreenLevel"] := r.payload.getInteger("zappi.0.mgl");
+		send devices.device to ManagedObject.SEND_CHANNEL;
+		
+		Measurement m := new Measurement;
+		m.measurements := {
+			"zappi": {
+				"evPower": MeasurementValue(r.payload.getFloat("zappi.0.ectp1"), "W", new dictionary<string, any>),
+				"totalChargeAdded": MeasurementValue(r.payload.getFloat("zappi.0.che"), "kWh", new dictionary<string, any>)
+			}
+		};
+		m.time := currentTime;
+		m.type := "myEnergi";
+		m.source := devices.deviceId;
+		send m to Measurement.SEND_CHANNEL;
+	}
+	action printResponse(Response r)
+	{
+		log JSONPlugin.toJSON(r.payload.data) at INFO;
+	}
+}
