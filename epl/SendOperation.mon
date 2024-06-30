@@ -73,11 +73,16 @@ event SunsynkDevices {
 }
 
 monitor SendOperationMonitor {
-	SunsynkDevices devices;
 	/** Initialize the application */
 	action onload() {
-		on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk2208309020", ["PowerUp","SetConfiguration"])): devices {
-			send Operation("", devices.deviceId, "PENDING", {"description":"Powerup on 2024-06-06 from 12:00 to 14:00", "PowerUp":<any>{"name":"Set Powerup", "parameters":{"date":"2024-06-06", "start":"12:00", "end":"14:00"}}}) to Operation.SEND_CHANNEL;
+		string date := "2024-06-30";
+		string start := "16:00";
+		string end := "17:00";
+		on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk2208309020", ["PowerUp","SetConfiguration"])) as devices {
+			send Operation("", devices.deviceId, "PENDING", {"description":"Powerup on "+date+" from "+start+" to "+end, "PowerUp":<any>{"name":"Set Powerup", "parameters":{"date":date, "start":start, "end":end}}}) to Operation.SEND_CHANNEL;
+		}
+		on SunsynkDevices(id=SunsynkDevices.create("myEnergi", "myEnergi12245712", ["SetChargeMode", "StopCharging", "BoostNow", "PowerUp"])) as mdevices {
+			send Operation("", mdevices.deviceId, "PENDING", {"description":"Powerup on "+date+" from "+start+" to "+end, "PowerUp":<any>{"name":"Set Powerup", "parameters":{"date":date, "start":start, "end":end}}}) to Operation.SEND_CHANNEL;
 		}
 	}
 }
