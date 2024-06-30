@@ -126,7 +126,7 @@ monitor MonitorApplicationState {
 						// check that it's active
 						assertThat(eplfile[0].getEntry("state")=<any>"active", monitorName, "EPL App is not active");
 						// check that a monitor instance with that name exists
-						sequence<any> m := <sequence<any>>Fn.filter(monitors, Fn.partial(Fn.fieldEqual, ["name", monitorName]));
+						sequence<any> m := <sequence<any>>Fn.filter(monitors, Fn.partial(Fn.fieldEqual, ["nameSpace", "eplfiles."+monitorName]));
 						assertThat(m.size()>0, monitorName, "EPL Monitor does not exist for app");
 						// for each device in that entry
 						any deviceType;
