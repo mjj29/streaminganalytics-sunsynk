@@ -131,6 +131,7 @@ monitor MonitorApplicationState {
 						// for each device in that entry
 						any deviceType;
 						for deviceType in monitorDevices.getKeys() {
+							log "Checking for device "+deviceType;
 							// check that a device with that type exists
 							on SunsynkDevices(id=SunsynkDevices.find(<string>deviceType)) as devices {
 								assertThat(devices.devices.size()>0, deviceType, "Device not found for type");
@@ -158,7 +159,6 @@ monitor MonitorApplicationState {
 									}
 								}
 							}
-							// for each fragment/series, check that the most recent measurement is at most duration old	
 						}
 					}
 				}
