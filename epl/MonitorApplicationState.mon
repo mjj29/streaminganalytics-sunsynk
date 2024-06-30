@@ -8,6 +8,7 @@ using com.apama.cumulocity.FindMeasurement;
 using com.apama.cumulocity.FindMeasurementResponse;
 using com.apama.cumulocity.FindMeasurementResponseAck;
 using com.apama.cumulocity.Alarm;
+using com.apama.cumulocity.SendEmail;
 
 using com.apama.cumulocity.ManagedObject;
 using com.apama.cumulocity.FindManagedObject;
@@ -23,6 +24,42 @@ using com.apama.json.JSONPlugin;
 using com.softwareag.connectivity.httpclient.HttpTransport;
 using com.softwareag.connectivity.httpclient.Request;
 using com.softwareag.connectivity.httpclient.Response;
+
+event SunsynkConfiguration {
+	constant string CREATED_CHANNEL := "SunsynkConfiguration.created";
+	static action create(string category, sequence<string> options) returns integer
+	{
+		SunsynkConfiguration config := new SunsynkConfiguration;
+		config.id := integer.getUnique();
+		monitor.subscribe(FindTenantOptionsResponse.SUBSCRIBE_CHANNEL);
+		integer reqId := Util.generateReqId();
+		on FindTenantOptionsResponse(reqId=reqId) as resp {
+			monitor.unsubscribe(FindTenantOptionsResponse.SUBSCRIBE_CHANNEL);
+			TenantOption t;
+			for t in resp.options {
+				string k;
+				for k in options {
+					if t.key = k {
+						config.options[k] := t.value;
+					}
+				}
+			}
+			string k;
+			for k in options {
+				if not config.options.hasKey(k) {
+					log "Error, missing configuration, define the following tenant options in the "+category+" category: "+options.toString() at ERROR;
+					return;
+				}
+			}
+			
+			send config to CREATED_CHANNEL;
+		}
+		send FindTenantOptions(reqId, false, category, "", new dictionary<string, string>) to FindTenantOptions.SEND_CHANNEL;
+		return config.id;
+	}
+	integer id;
+	dictionary<string, string> options;
+}
 
 event SunsynkDevices {
 	constant string CREATED_CHANNEL := "SunsynkDevices.created";
@@ -48,30 +85,33 @@ event SunsynkDevices {
 	sequence<ManagedObject> devices;
 }
 
-monitor MonitorApplicationState {
+monitor MonitorApplicationState
+{
+	SunsynkConfiguration config;
 	action onload() {
 		monitor.subscribe(GenericResponse.SUBSCRIBE_CHANNEL);
 		monitor.subscribe(FindMeasurementResponse.SUBSCRIBE_CHANNEL);
+		monitor.subscribe(SunsynkConfiguration.SUBSCRIBE_CHANNEL);
 		// check that the expected set of applications are active in EPLApps and are live in the correlator
 		// check the the expected set of devices are producing measurements
 		any sunsynkMonitorsAndDevices := {
 			"SunsynkDataCollector": {
 				"sunsynkInvertor": {
 					"sunsynkBattery": {				
-						"batteryPower": 15,
-						"batteryCharge": 15
+						"batteryPower": 60,
+						"batteryCharge": 60
 					},
 					"sunsynkGrid": {
-						"gridPower": 15,
-						"gridDailyUsage": 15
+						"gridPower": 60,
+						"gridDailyUsage": 60
 					},
 					"sunsynkHome": {
-						"loadPower": 15,
-						"loadDailyUsage": 15
+						"loadPower": 60,
+						"loadDailyUsage": 60
 					},
 					"sunsynkPV": {
-						"pvPower": 15,
-						"pvDailyGen": 15
+						"pvPower": 60,
+						"pvDailyGen": 60
 					}
 				}
 			},
@@ -94,10 +134,11 @@ monitor MonitorApplicationState {
 			},
 			"GenerationPredictor": new dictionary<string, dictionary<string, integer>>
 		};
-
-		checkMonitorStatus(sunsynkMonitorsAndDevices);
-		on all wait(60.*60.) {
+		on SunsynkConfiguration(id=SunsynkConfiguration.create("apamax.sunsynk", ["notificationEmail"])): config {
 			checkMonitorStatus(sunsynkMonitorsAndDevices);
+			on all wait(60.*60.) {
+				checkMonitorStatus(sunsynkMonitorsAndDevices);
+			}
 		}
 	}
 	action checkMonitorStatus(any sunsynkMonitorsAndDevices)
@@ -128,6 +169,7 @@ monitor MonitorApplicationState {
 						// check that a monitor instance with that name exists
 						sequence<any> m := <sequence<any>>Fn.filter(monitors, Fn.partial(Fn.fieldEqual, ["nameSpace", "eplfiles."+monitorName]));
 						assertThat(m.size()>0, monitorName, "EPL Monitor does not exist for app");
+						assertThat(<integer>m[0].getEntry("subMonitors")>0, m[0], "EPL Monitor does not have any sub-monitors");
 						// for each device in that entry
 						any deviceType;
 						for deviceType in monitorDevices.getKeys() {
@@ -146,7 +188,7 @@ monitor MonitorApplicationState {
 											"source":devices.devices[0].id,
 											"valueFragmentType":<string>deviceFragment,
 											"valueFragmentSeries":<string>deviceSeries,
-											"revert":"false",
+											"revert":"true",
 											"pageSize":"1",
 											"currentPage":"1"										
 										}) to FindMeasurement.SEND_CHANNEL;
@@ -168,10 +210,16 @@ monitor MonitorApplicationState {
 			assertThat(false, r, "Failed to get EPL files");
 		}
 	}
+	action sendNotificationEmail(string message)
+	{
+		SendEmail se := SendEmail(message, "Sunsynk monitoring event:<br/>"+message+"<br/>Yours etc,</br>Sunsynk management bot.", "", [notificationEmail], new sequence<string>, "", new dictionary<string, string>);
+		send se to SendEmail.SEND_CHANNEL;
+	}
 	action assertThat(boolean comparison, any object, string message)
 	{
 		if not comparison {
 			log message+": "+object.valueToString() at ERROR;
+			sendNotificationEmail(message+": "+object.valueToString());
 		}
 	}
 }
