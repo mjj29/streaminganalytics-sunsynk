@@ -146,7 +146,7 @@ monitor MonitorApplicationState {
 											"source":devices.devices[0].id,
 											"valueFragmentType":<string>deviceFragment,
 											"valueFragmentSeries":<string>deviceSeries,
-											"revert":"true",
+											"revert":"false",
 											"pageSize":"1",
 											"currentPage":"1"										
 										}) to FindMeasurement.SEND_CHANNEL;
