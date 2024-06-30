@@ -14,7 +14,9 @@ using com.apama.cumulocity.ManagedObject;
 using com.apama.cumulocity.FindManagedObject;
 using com.apama.cumulocity.FindManagedObjectResponse;
 using com.apama.cumulocity.FindManagedObjectResponseAck;
-
+using com.apama.cumulocity.FindTenantOptions;
+using com.apama.cumulocity.FindTenantOptionsResponse;
+using com.apama.cumulocity.TenantOption;
 
 using com.apama.correlator.Component;
 using com.apama.functional.Fn;
