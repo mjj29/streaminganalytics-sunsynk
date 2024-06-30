@@ -93,7 +93,7 @@ monitor MonitorApplicationState
 	action onload() {
 		monitor.subscribe(GenericResponse.SUBSCRIBE_CHANNEL);
 		monitor.subscribe(FindMeasurementResponse.SUBSCRIBE_CHANNEL);
-		monitor.subscribe(SunsynkConfiguration.SUBSCRIBE_CHANNEL);
+		monitor.subscribe(SunsynkConfiguration.CREATED_CHANNEL);
 		// check that the expected set of applications are active in EPLApps and are live in the correlator
 		// check the the expected set of devices are producing measurements
 		any sunsynkMonitorsAndDevices := {
@@ -214,7 +214,7 @@ monitor MonitorApplicationState
 	}
 	action sendNotificationEmail(string message)
 	{
-		SendEmail se := SendEmail(message, "Sunsynk monitoring event:<br/>"+message+"<br/>Yours etc,</br>Sunsynk management bot.", "", [notificationEmail], new sequence<string>, "", new dictionary<string, string>);
+		SendEmail se := SendEmail(message, "Sunsynk monitoring event:<br/>"+message+"<br/>Yours etc,</br>Sunsynk management bot.", "", [config.options["notificationEmail"]], new sequence<string>, "", new dictionary<string, string>);
 		send se to SendEmail.SEND_CHANNEL;
 	}
 	action assertThat(boolean comparison, any object, string message)
