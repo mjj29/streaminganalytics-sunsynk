@@ -264,7 +264,7 @@ monitor MyEnergiDataCollectorMonitor
 						else if op.params.hasKey("BoostNow") {
 							collector.setChargeMode(zappiSerial, MyEnergiDataCollector.CHARGE_MODE_FAST);
 						}
-						if op.params.hasKey("PowerUp") {
+						else if op.params.hasKey("PowerUp") {
 							collector.setOneOffChargePeriod(zappiSerial, ae.getString("PowerUp.parameters.date"), ae.getString("PowerUp.parameters.start"), ae.getString("PowerUp.parameters.end"));
 						}
 						else {
