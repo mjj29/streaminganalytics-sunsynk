@@ -75,7 +75,7 @@ event SunsynkDevices {
 monitor SendOperationMonitor {
 	/** Initialize the application */
 	action onload() {
-		string date := "2024-07-02";
+		string date := "2024-09-06";
 		string start := "12:00";
 		string end := "14:30";
 		on SunsynkDevices(id=SunsynkDevices.create("sunsynkInvertor", "sunsynk2208309020", ["PowerUp","SetConfiguration"])) as devices {
