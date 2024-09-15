@@ -724,6 +724,7 @@ event GitHandler
 				tree.andThen(updateGitFilesToEPLApps)
 				// TODO also AB models
 				// TODO also template instances
+				// TODO also dashboards
 			]);
 		}
 		return new any;
@@ -779,9 +780,16 @@ event GitHandler
 		}
 		on all ManagedObject(type="c8y_PublicAnalyticsBuilderModel") as a {
 			// TODO
+			// params[templateParameters]
+			// params[c8y_analyticsModel]
 		}
 		on all ManagedObject(type="c8y_TemplateInstance") as a {
 			// TODO
+			// params[templateParameterValues]
+		}
+		on all ManagedObject(name="Dashboard") as a {
+			// TODO
+			// params[c8y_Dashboards]
 		}
 		on all ManagedObjectDeleted() as mod { 
 			if existingEplApps.hasKey(mod.id) {
@@ -793,6 +801,7 @@ event GitHandler
 					.andCatch(FailLogger("removing EPL app '"+name+"' from git").exec);
 				
 			}
+			// also deletions for the above
 		}
 		on all wait(10.0) {
 			GithubPromiseHelper.getHead(http, repo, auth, branch)
