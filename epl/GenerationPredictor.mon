@@ -91,13 +91,11 @@ monitor GenerationPredictor {
 			on SunsynkDevices(id=SunsynkDevices.find("sunsynkInvertor")): devices {
 				float chargeDivisor := 240.;
 				float chargeFactor := (<float>devices.devices[0].params["pvMaxPower"])/(<float>devices.devices[0].params["maxBatteryCapacity"]*chargeDivisor);
-				float chargeOffset := 110.;
+				float chargeOffset := 140.;
 				log "maxPV = "+devices.devices[0].params["pvMaxPower"].valueToString()+" batteryCapacity="+ devices.devices[0].params["maxBatteryCapacity"].valueToString()+" chargeDivisor="+chargeDivisor.toString()+" chargeFactor = "+chargeFactor.toString()+" chargeOffset = "+chargeOffset.toString();
 				on all MeasurementFragment(type="weatherData", valueFragment="weatherForecast", valueSeries="sunshine_duration") as mf {
 					float percentage := 15.;
-					if mf.value > 0. {
-						percentage := float.max(15., chargeOffset-(chargeFactor*mf.value));
-					}
+					percentage := float.max(15., chargeOffset-(chargeFactor*mf.value));
 					log "Predict we should charge to "+percentage.toString();
 					send SendEmail("Setting charge percentange to "+percentage.toString(), 
 					"Setting charge percentage to "+percentage.toString(),
